@@ -15,12 +15,12 @@ env:
 jobs:
   presubmit:
     name: Presubmit Checks
-    runs-on: ubuntu-latest
+    runs-on: openprot-ci-runner
     steps:
     - uses: actions/checkout@v6
 
     - name: Setup Bazel
-      uses: bazel-contrib/setup-bazel@0.18.0
+      uses: bazel-contrib/setup-bazel@0.19.0
       with:
         bazelisk-cache: true
         disk-cache: true
@@ -29,45 +29,45 @@ jobs:
     - name: Presubmit Checks
       # The presubmit workflow performs formatting checks, license checks
       # C/C++ include checks and clippy lints.
+      # See workflows.json for the `presubmit` definition.
       run: ./pw presubmit
 
   test:
     name: Test
     needs: presubmit
-    runs-on: ubuntu-latest
+    runs-on: openprot-ci-runner
     steps:
     - uses: actions/checkout@v6
 
     - name: Setup Bazel
-      uses: bazel-contrib/setup-bazel@0.18.0
+      uses: bazel-contrib/setup-bazel@0.19.0
       with:
         bazelisk-cache: true
         disk-cache: true
         repository-cache: true
 
     - name: Run tests
-      run: |
-        bazel test \
-            --keep_going \
-            //...
+      # See workflows.json for the `ci` definition.
+      run: ./pw ci
 
-  build-targets:
+  build:
     name: Build Targets
     needs: test
-    runs-on: ubuntu-latest
+    runs-on: openprot-ci-runner
 
     steps:
     - uses: actions/checkout@v6
 
     - name: Setup Bazel
-      uses: bazel-contrib/setup-bazel@0.18.0
+      uses: bazel-contrib/setup-bazel@0.19.0
       with:
         bazelisk-cache: true
         disk-cache: true
         repository-cache: true
 
     - name: Build
-      run: bazel build //...
+      # See workflows.json for the `default` definition.
+      run: ./pw default
 
   security-audit:
     name: Security Audit

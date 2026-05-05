@@ -1,0 +1,517 @@
+# Licensed under the Apache-2.0 license
+# SPDX-License-Identifier: Apache-2.0
+
+load("@pigweed//pw_kernel/tooling:system_image.bzl", "system_image", "system_image_test")
+load("@pigweed//pw_kernel/tooling:target_linker_script.bzl", "target_linker_script")
+load("@pigweed//pw_kernel/tooling/panic_detector:rust_binary_no_panics_test.bzl", "rust_binary_no_panics_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+load("//target/ast10x0:defs.bzl", "TARGET_COMPATIBLE_WITH")
+
+filegroup(
+    name = "system_config",
+    srcs = ["system.json5"],
+)
+
+target_linker_script(
+    name = "linker_script",
+    system_config = ":system_config",
+    tags = ["kernel"],
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+    template = "//target/ast10x0:linker_script_template",
+)
+
+rust_binary(
+    name = "target",
+    srcs = ["target.rs"],
+    edition = "2024",
+    tags = ["kernel"],
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+    deps = [
+        ":linker_script",
+        "//target/ast10x0:entry",
+        "//target/ast10x0/peripherals",
+        "@pigweed//pw_kernel/arch/arm_cortex_m:arch_arm_cortex_m",
+        "@pigweed//pw_kernel/kernel",
+        "@pigweed//pw_kernel/subsys/console:console_backend",
+        "@pigweed//pw_kernel/target:target_common",
+        "@pigweed//pw_log/rust:pw_log",
+        "@rust_crates//:cortex-m-semihosting",
+    ],
+)
+
+system_image(
+    name = "smc",
+    kernel = ":target",
+    platform = "//target/ast10x0",
+    system_config = ":system_config",
+    tags = ["kernel"],
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+    userspace = False,
+)
+
+system_image_test(
+    name = "smc_test",
+    image = ":smc",
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+)
+
+rust_binary_no_panics_test(
+    name = "no_panics_test",
+    binary = ":smc",
+    tags = ["kernel"],
+)
+
+# ── QEMU-only targets ─────────────────────────────────────────────────────────
+# Tagged "integration" so k_common / --config=virt_ast10x0 excludes them.
+# Invoke explicitly:
+#   bazelisk test --platforms=//target/ast10x0 \
+#     //target/ast10x0/tests/smc:smc_qemu_erase_state_test
+
+rust_binary(
+    name = "target_qemu",
+    srcs = ["target_qemu.rs"],
+    edition = "2024",
+    tags = ["kernel"],
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+    deps = [
+        ":linker_script",
+        "//target/ast10x0:entry",
+        "//target/ast10x0/peripherals",
+        "@pigweed//pw_kernel/arch/arm_cortex_m:arch_arm_cortex_m",
+        "@pigweed//pw_kernel/kernel",
+        "@pigweed//pw_kernel/subsys/console:console_backend",
+        "@pigweed//pw_kernel/target:target_common",
+        "@pigweed//pw_log/rust:pw_log",
+        "@rust_crates//:cortex-m-semihosting",
+    ],
+)
+
+system_image(
+    name = "smc_qemu_erase_state",
+    kernel = ":target_qemu",
+    platform = "//target/ast10x0",
+    system_config = ":system_config",
+    tags = ["kernel"],
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+    userspace = False,
+)
+
+system_image_test(
+    name = "smc_qemu_erase_state_test",
+    image = ":smc_qemu_erase_state",
+    tags = [
+        "kernel",
+        "integration",  # excluded by k_common; QEMU-only
+    ],
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+)
+
+# ── Device layer (Phase 3A) ───────────────────────────────────────────────────
+
+rust_binary(
+    name = "target_device",
+    srcs = ["target_device.rs"],
+    edition = "2024",
+    tags = ["kernel"],
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+    deps = [
+        ":linker_script",
+        "//target/ast10x0:entry",
+        "//target/ast10x0/peripherals",
+        "@pigweed//pw_kernel/arch/arm_cortex_m:arch_arm_cortex_m",
+        "@pigweed//pw_kernel/kernel",
+        "@pigweed//pw_kernel/subsys/console:console_backend",
+        "@pigweed//pw_kernel/target:target_common",
+        "@pigweed//pw_log/rust:pw_log",
+        "@rust_crates//:cortex-m-semihosting",
+    ],
+)
+
+system_image(
+    name = "smc_device",
+    kernel = ":target_device",
+    platform = "//target/ast10x0",
+    system_config = ":system_config",
+    tags = ["kernel"],
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+    userspace = False,
+)
+
+system_image_test(
+    name = "smc_device_test",
+    image = ":smc_device",
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+)
+
+rust_binary_no_panics_test(
+    name = "device_no_panics_test",
+    binary = ":smc_device",
+    tags = ["kernel"],
+)
+
+# ── Device layer QEMU-only ────────────────────────────────────────────────────
+# Tagged "integration" so k_common / --config=virt_ast10x0 excludes them.
+# Invoke explicitly:
+#   bazelisk test --config=virt_ast10x0 --test_tag_filters= \
+#     //target/ast10x0/tests/smc:smc_device_qemu_erase_state_test
+
+rust_binary(
+    name = "target_device_qemu",
+    srcs = ["target_device_qemu.rs"],
+    edition = "2024",
+    tags = ["kernel"],
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+    deps = [
+        ":linker_script",
+        "//target/ast10x0:entry",
+        "//target/ast10x0/peripherals",
+        "@pigweed//pw_kernel/arch/arm_cortex_m:arch_arm_cortex_m",
+        "@pigweed//pw_kernel/kernel",
+        "@pigweed//pw_kernel/subsys/console:console_backend",
+        "@pigweed//pw_kernel/target:target_common",
+        "@pigweed//pw_log/rust:pw_log",
+        "@rust_crates//:cortex-m-semihosting",
+    ],
+)
+
+system_image(
+    name = "smc_device_qemu_erase_state",
+    kernel = ":target_device_qemu",
+    platform = "//target/ast10x0",
+    system_config = ":system_config",
+    tags = ["kernel"],
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+    userspace = False,
+)
+
+system_image_test(
+    name = "smc_device_qemu_erase_state_test",
+    image = ":smc_device_qemu_erase_state",
+    tags = [
+        "kernel",
+        "integration",  # excluded by k_common; QEMU-only
+    ],
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+)
+
+# QEMU-only program/erase end-to-end validation through SpiNorFlash facade.
+rust_binary(
+    name = "target_device_qemu_program_erase",
+    srcs = ["target_device_qemu_program_erase.rs"],
+    edition = "2024",
+    tags = ["kernel"],
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+    deps = [
+        ":linker_script",
+        "//target/ast10x0:entry",
+        "//target/ast10x0/peripherals",
+        "@pigweed//pw_kernel/arch/arm_cortex_m:arch_arm_cortex_m",
+        "@pigweed//pw_kernel/kernel",
+        "@pigweed//pw_kernel/subsys/console:console_backend",
+        "@pigweed//pw_kernel/target:target_common",
+        "@pigweed//pw_log/rust:pw_log",
+        "@rust_crates//:cortex-m-semihosting",
+    ],
+)
+
+system_image(
+    name = "smc_device_qemu_program_erase",
+    kernel = ":target_device_qemu_program_erase",
+    platform = "//target/ast10x0",
+    system_config = ":system_config",
+    tags = ["kernel"],
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+    userspace = False,
+)
+
+system_image_test(
+    name = "smc_device_qemu_program_erase_test",
+    image = ":smc_device_qemu_program_erase",
+    tags = [
+        "kernel",
+        "integration",  # excluded by k_common; QEMU-only
+    ],
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+)
+
+# ── Error-granularity negative tests ─────────────────────────────────────────
+# Verifies ControllerNotReady is returned (not HardwareError) when transport
+# operations are attempted while DMA is in-flight.
+# Tagged "integration": QEMU-only because DMA kick-off writes hardware registers.
+#   bazelisk test --config=virt_ast10x0 --test_tag_filters= \
+#     //target/ast10x0/tests/smc:smc_error_granularity_test
+
+rust_binary(
+    name = "target_error_granularity",
+    srcs = ["target_error_granularity.rs"],
+    edition = "2024",
+    tags = ["kernel"],
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+    deps = [
+        ":linker_script",
+        "//target/ast10x0:entry",
+        "//target/ast10x0/peripherals",
+        "@pigweed//pw_kernel/arch/arm_cortex_m:arch_arm_cortex_m",
+        "@pigweed//pw_kernel/kernel",
+        "@pigweed//pw_kernel/subsys/console:console_backend",
+        "@pigweed//pw_kernel/target:target_common",
+        "@pigweed//pw_log/rust:pw_log",
+        "@rust_crates//:cortex-m-semihosting",
+    ],
+)
+
+system_image(
+    name = "smc_error_granularity",
+    kernel = ":target_error_granularity",
+    platform = "//target/ast10x0",
+    system_config = ":system_config",
+    tags = ["kernel"],
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+    userspace = False,
+)
+
+system_image_test(
+    name = "smc_error_granularity_test",
+    image = ":smc_error_granularity",
+    tags = [
+        "kernel",
+        "integration",  # excluded by k_common; QEMU-only
+    ],
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+)
+
+# ── Multi-CS command routing tests ───────────────────────────────────────────
+# Verifies ChipSelect parameter routing and InvalidChipSelect guard.
+# Tagged "integration": QEMU-only.
+#   bazelisk test --config=virt_ast10x0 --test_tag_filters= \
+#     //target/ast10x0/tests/smc:smc_device_qemu_multi_cs_test
+
+rust_binary(
+    name = "target_device_qemu_multi_cs",
+    srcs = ["target_device_qemu_multi_cs.rs"],
+    edition = "2024",
+    tags = ["kernel"],
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+    deps = [
+        ":linker_script",
+        "//target/ast10x0:entry",
+        "//target/ast10x0/peripherals",
+        "@pigweed//pw_kernel/arch/arm_cortex_m:arch_arm_cortex_m",
+        "@pigweed//pw_kernel/kernel",
+        "@pigweed//pw_kernel/subsys/console:console_backend",
+        "@pigweed//pw_kernel/target:target_common",
+        "@pigweed//pw_log/rust:pw_log",
+        "@rust_crates//:cortex-m-semihosting",
+    ],
+)
+
+system_image(
+    name = "smc_device_qemu_multi_cs",
+    kernel = ":target_device_qemu_multi_cs",
+    platform = "//target/ast10x0",
+    system_config = ":system_config",
+    tags = ["kernel"],
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+    userspace = False,
+)
+
+system_image_test(
+    name = "smc_device_qemu_multi_cs_test",
+    image = ":smc_device_qemu_multi_cs",
+    tags = [
+        "kernel",
+        "integration",  # excluded by k_common; QEMU-only
+    ],
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+)
+
+# ── Per-CS capacity validation (DEV-PAR-001) ─────────────────────────────────
+# Verifies SpiNorFlash::from_fmc_cs validates FlashConfig against the selected
+# CS's capacity, not the controller-total capacity.
+# Tagged "integration": QEMU-only.
+#   bazelisk test --config=virt_ast10x0 --test_tag_filters= \
+#     //target/ast10x0/tests/smc:smc_device_qemu_multi_cs_capacity_test
+
+rust_binary(
+    name = "target_device_qemu_multi_cs_capacity",
+    srcs = ["target_device_qemu_multi_cs_capacity.rs"],
+    edition = "2024",
+    tags = ["kernel"],
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+    deps = [
+        ":linker_script",
+        "//target/ast10x0:entry",
+        "//target/ast10x0/peripherals",
+        "@pigweed//pw_kernel/arch/arm_cortex_m:arch_arm_cortex_m",
+        "@pigweed//pw_kernel/kernel",
+        "@pigweed//pw_kernel/subsys/console:console_backend",
+        "@pigweed//pw_kernel/target:target_common",
+        "@pigweed//pw_log/rust:pw_log",
+        "@rust_crates//:cortex-m-semihosting",
+    ],
+)
+
+system_image(
+    name = "smc_device_qemu_multi_cs_capacity",
+    kernel = ":target_device_qemu_multi_cs_capacity",
+    platform = "//target/ast10x0",
+    system_config = ":system_config",
+    tags = ["kernel"],
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+    userspace = False,
+)
+
+system_image_test(
+    name = "smc_device_qemu_multi_cs_capacity_test",
+    image = ":smc_device_qemu_multi_cs_capacity",
+    tags = [
+        "kernel",
+        "integration",  # excluded by k_common; QEMU-only
+    ],
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+)
+
+# ── CS-local offset semantics (DEV-PAR-002 + DEV-PAR-003) ────────────────────
+# Verifies SpiNorFlash::{read,program_page,erase_sector} on a CS1 facade use
+# per-CS capacity bounds and translate device-local offsets to per-CS
+# controller-window addresses (not aliasing CS0).
+# Tagged "integration": QEMU-only.
+#   bazelisk test --config=virt_ast10x0 --test_tag_filters= \
+#     //target/ast10x0/tests/smc:smc_device_qemu_multi_cs_offsets_test
+
+rust_binary(
+    name = "target_device_qemu_multi_cs_offsets",
+    srcs = ["target_device_qemu_multi_cs_offsets.rs"],
+    edition = "2024",
+    tags = ["kernel"],
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+    deps = [
+        ":linker_script",
+        "//target/ast10x0:entry",
+        "//target/ast10x0/peripherals",
+        "@pigweed//pw_kernel/arch/arm_cortex_m:arch_arm_cortex_m",
+        "@pigweed//pw_kernel/kernel",
+        "@pigweed//pw_kernel/subsys/console:console_backend",
+        "@pigweed//pw_kernel/target:target_common",
+        "@pigweed//pw_log/rust:pw_log",
+        "@rust_crates//:cortex-m-semihosting",
+    ],
+)
+
+system_image(
+    name = "smc_device_qemu_multi_cs_offsets",
+    kernel = ":target_device_qemu_multi_cs_offsets",
+    platform = "//target/ast10x0",
+    system_config = ":system_config",
+    tags = ["kernel"],
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+    userspace = False,
+)
+
+system_image_test(
+    name = "smc_device_qemu_multi_cs_offsets_test",
+    image = ":smc_device_qemu_multi_cs_offsets",
+    tags = [
+        "kernel",
+        "integration",  # excluded by k_common; QEMU-only
+    ],
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+)
+
+# ── SPI1/SPI2 multi-CS wrapper coverage ─────────────────────────────────────
+# Verifies SPI wrapper CS0/CS1 routing, InvalidChipSelect guard, and
+# from_spi_cs per-CS config validation for both SPI1 and SPI2.
+# Tagged "integration": QEMU-only.
+#   bazelisk test --config=virt_ast10x0 --test_tag_filters= \
+#     //target/ast10x0/tests/smc:smc_device_qemu_multi_cs_spi_test
+
+rust_binary(
+    name = "target_device_qemu_multi_cs_spi",
+    srcs = ["target_device_qemu_multi_cs_spi.rs"],
+    edition = "2024",
+    tags = ["kernel"],
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+    deps = [
+        ":linker_script",
+        "//target/ast10x0:entry",
+        "//target/ast10x0/peripherals",
+        "@pigweed//pw_kernel/arch/arm_cortex_m:arch_arm_cortex_m",
+        "@pigweed//pw_kernel/kernel",
+        "@pigweed//pw_kernel/subsys/console:console_backend",
+        "@pigweed//pw_kernel/target:target_common",
+        "@pigweed//pw_log/rust:pw_log",
+        "@rust_crates//:cortex-m-semihosting",
+    ],
+)
+
+system_image(
+    name = "smc_device_qemu_multi_cs_spi",
+    kernel = ":target_device_qemu_multi_cs_spi",
+    platform = "//target/ast10x0",
+    system_config = ":system_config",
+    tags = ["kernel"],
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+    userspace = False,
+)
+
+system_image_test(
+    name = "smc_device_qemu_multi_cs_spi_test",
+    image = ":smc_device_qemu_multi_cs_spi",
+    tags = [
+        "kernel",
+        "integration",  # excluded by k_common; QEMU-only
+    ],
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+)
+
+# ── Error IRQ scaffold ────────────────────────────────────────────────────────
+# Tier 1 (QEMU-reachable): init with enable_interrupts=true, spurious-fire
+# guard (handle_dma_irq with no bits set → ControllerNotReady), and
+# assert state remains Ready after spurious fire.
+#
+# Tier 2 (hardware-only, marked TODO in source): write-protect (bit 9),
+# DMA-abort (bit 10 in-flight), command-abort (bit 10 idle), DMA-complete
+# (bit 11).  FMC IRQ number: 39 (ast1060_pac::Interrupt::fmc).
+#
+# Invoke explicitly:
+#   bazelisk test --config=virt_ast10x0 --test_tag_filters= \
+#     //target/ast10x0/tests/smc:smc_error_irq_test
+
+rust_binary(
+    name = "target_error_irq",
+    srcs = ["target_error_irq.rs"],
+    edition = "2024",
+    tags = ["kernel"],
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+    deps = [
+        ":linker_script",
+        "//target/ast10x0:entry",
+        "//target/ast10x0/peripherals",
+        "@pigweed//pw_kernel/arch/arm_cortex_m:arch_arm_cortex_m",
+        "@pigweed//pw_kernel/kernel",
+        "@pigweed//pw_kernel/subsys/console:console_backend",
+        "@pigweed//pw_kernel/target:target_common",
+        "@pigweed//pw_log/rust:pw_log",
+        "@rust_crates//:cortex-m-semihosting",
+    ],
+)
+
+system_image(
+    name = "smc_error_irq",
+    kernel = ":target_error_irq",
+    platform = "//target/ast10x0",
+    system_config = ":system_config",
+    tags = ["kernel"],
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+    userspace = False,
+)
+
+system_image_test(
+    name = "smc_error_irq_test",
+    image = ":smc_error_irq",
+    tags = [
+        "kernel",
+        "integration",  # excluded by k_common; QEMU-only
+    ],
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+)

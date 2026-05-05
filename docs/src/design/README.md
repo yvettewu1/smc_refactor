@@ -7,11 +7,9 @@ of the project.
 
 ## Documents
 
--   [**Generic Digest Server Design Document**](./driver-hubris-hash.md): This
-    document describes the design and architecture of a generic digest server
-    for Hubris OS that supports both SPDM and PLDM protocol implementations.
-
--   [**Converting Rust HAL Traits to Idol Interfaces**](./rust-trait-to-idl-conversion.md):
-    A practical guide that explains how to transform Rust Hardware Abstraction
-    Layer (HAL) traits into Idol interface definitions for use in Hubris-based
-    systems.
+-   [**Pigweed Integration Overview**](./pigweed-overview.md): What openprot
+    consumes from Pigweed (`pw_kernel`, `pw_log`, `pw_status`, toolchains,
+    crate universe, the `./pw` launcher) and where each piece is pinned.
+-   [**pw_kernel IPC**](./pw-kernel-ipc.md): How to declare and use channel
+    objects to communicate between two `pw_kernel` userspace processes.
+    Worked example lives at `target/veer/ipc/`.
