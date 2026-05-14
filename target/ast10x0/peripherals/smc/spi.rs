@@ -83,13 +83,13 @@ impl SpiUninit {
 
 impl SpiReady {
     /// Perform a programmed I/O read via the SPI flash window.
-    pub fn read(&self, offset: u32, buf: &mut [u8]) -> Result<usize, SmcError> {
-        self.inner.read(offset, buf)
+    pub fn read(&self, cs: ChipSelect, offset: u32, buf: &mut [u8]) -> Result<usize, SmcError> {
+        self.inner.read(cs, offset, buf)
     }
 
     /// Initiate a DMA read operation.
-    pub fn dma_read(&mut self, flash_offset: u32, dram_addr: usize, len: u32) -> Result<(), SmcError> {
-        self.inner.dma_read(flash_offset, dram_addr, len)
+    pub fn dma_read(&mut self, cs: ChipSelect, flash_offset: u32, dram_addr: usize, len: u32) -> Result<(), SmcError> {
+        self.inner.dma_read(cs, flash_offset, dram_addr, len)
     }
 
     /// Read raw DMA/interrupt status bits from FMC008.

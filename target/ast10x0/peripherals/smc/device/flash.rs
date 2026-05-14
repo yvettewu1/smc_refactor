@@ -411,7 +411,7 @@ impl<'a> SpiNorFlash<'a> {
         }
         let base: u32 = match self.cs {
             ChipSelect::Cs0 => 0,
-            ChipSelect::Cs1 => match self.cs_config_for(ChipSelect::Cs0) {
+            ChipSelect::Cs1 => match self.cs_config_for(ChipSelect::Cs1) {
                 Ok(cfg) => u32::try_from(
                     (cfg.capacity_mb as usize)
                         .checked_mul(1024 * 1024)
@@ -512,9 +512,10 @@ impl SpiNorFlashDevice for SpiNorFlash<'_> {
         // the controller-window address before issuing the segment-routed read.
         self.validate_range(offset, buf.len())?;
         let translated = self.device_to_controller_offset(offset)?;
+        let cs = self.cs;
         match &self.backend {
-            FlashBackend::Fmc(fmc) => fmc.read(translated, buf),
-            FlashBackend::Spi(spi) => spi.read(translated, buf),
+            FlashBackend::Fmc(fmc) => fmc.read(cs, translated, buf),
+            FlashBackend::Spi(spi) => spi.read(cs, translated, buf),
         }
     }
 

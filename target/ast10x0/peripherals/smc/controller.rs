@@ -111,10 +111,14 @@ impl Smc<Uninitialized> {
         if self.config.cs0.is_some() {
             conf |= 1 << 16; // CONF_ENABLE_W0
             conf |= 0x2 << 0; // FLASH_TYPE_SPI
+            let cs = ChipSelect::Cs0;
+            Self::spi_read_init(&self, cs);
         }
         if self.config.cs1.is_some() {
             conf |= 1 << 17; // CONF_ENABLE_W1
             conf |= 0x2 << 2; // FLASH_TYPE_SPI
+            let cs = ChipSelect::Cs0;
+            Self::spi_read_init(&self, cs);
         }
         self.regs.write_config(conf);
 
@@ -149,7 +153,21 @@ impl Smc<Uninitialized> {
             _mode: PhantomData,
         })
     }
+    //TODO: call from nordevice layer instead 
+    fn spi_read_init(&self, cs: ChipSelect) {
+        let mode: TransferMode = TransferMode::Mode114;
+        let dummy: u32 = 0x1;
 
+        //TODO: SPI_NOR_CMD_QREAD (1-1-4)
+        let read_cmd = mode.cmd_io_bits()
+            | (0x6C << 16)
+            | (dummy << 6)
+            | ASPEED_SPI_NORMAL_READ;
+
+        self.regs.write_cs_ctrl(cs, read_cmd);
+        self.regs.write_addr_width(1);        
+    }
+    
     fn configure_timing(&self, cs: usize, config: &FlashConfig) -> Result<(), SmcError> {
         // Timing calibration is topology-aware.
         //
@@ -163,7 +181,8 @@ impl Smc<Uninitialized> {
         //
         // For now, all topologies use a single divider lookup; no HCLK sweep.
         // Phase 3+: add conditional calibration logic per topology and master_idx.
-
+        
+        //TODO: need to get this from scu register
         let sysclk_mhz = 200u32;
         let encoded_div = spi_freq_div(sysclk_mhz, config.spi_clock_mhz)?;
 
@@ -221,9 +240,10 @@ impl Smc<Ready> {
     ///
     /// Reads directly from the flash memory window. Hardware automatically
     /// converts memory accesses to SPI transactions.
-    pub fn read(&self, offset: u32, buf: &mut [u8]) -> Result<usize, SmcError> {
+    pub fn read(&self, cs: ChipSelect, offset: u32, buf: &mut [u8]) -> Result<usize, SmcError> {
         let capacity_bytes = total_capacity_bytes(self.config.cs0, self.config.cs1)?;
-        let window = self.controller_id.flash_window_address() as *const u8;
+        let cs_idx = cs as usize;
+        let window = self.flash_window_base[cs_idx] as *const u8;
         let offset = validate_mapped_range(offset, buf.len(), capacity_bytes)?;
         let flash_ptr = window.wrapping_add(offset);
 
@@ -241,20 +261,24 @@ impl Smc<Ready> {
     }
 
     /// Initiate a DMA read operation (non-blocking).
-    pub fn dma_read(&mut self, flash_offset: u32, dram_addr: usize, len: u32) -> Result<(), SmcError> {
+    pub fn dma_read(&mut self, cs: ChipSelect, flash_offset: u32, dram_addr: usize, len: u32) -> Result<(), SmcError> {
         if self.state != SmcState::Idle {
             return Err(SmcError::ControllerNotReady);
         }
         if !self.config.dma_enabled {
             return Err(SmcError::DmaNotEnabled);
         }
+        if cs == ChipSelect::Cs1 && self.config.cs1.is_none() {
+            return Err(SmcError::InvalidChipSelect);
+        }
 
         let capacity_bytes = total_capacity_bytes(self.config.cs0, self.config.cs1)?;
-        let cs0_capacity = flash_capacity_bytes(self.config.cs0)?;
+        let cs_config = self.cs_config(cs)?;
+        let cs_capacity = flash_capacity_bytes(Some(cs_config))?;
         let validated = validate_dma_read(
             flash_offset,
             self.flash_window_base,
-            cs0_capacity,
+            cs_capacity,
             dram_addr,
             len,
             capacity_bytes,
@@ -272,9 +296,10 @@ impl Smc<Ready> {
         // SPI command to issue; it must be in normal-read mode (not user mode)
         // before the kick. Matches aspeed-rust fmccontroller.rs::read_dma
         // ctrl construction: preserve frequency bits, set ASPEED_SPI_NORMAL_READ.
-        self.regs.write_cs0_ctrl(
-            (self.normal_read_ctrl[0] & SPI_CTRL_FREQ_MASK) | ASPEED_SPI_NORMAL_READ,
-        );
+        let cs_idx = cs as usize;
+        let ctrl_val = self.normal_read_ctrl[cs_idx] & SPI_CTRL_FREQ_MASK | 
+            ASPEED_SPI_NORMAL_READ;
+        self.regs.write_cs_ctrl(cs, ctrl_val);
 
         // Program DMA registers in the order used by aspeed-rust fmccontroller.rs::read_dma:
         //   fmc084 = flash side DMA address (R_DMA_FLASH_ADDR)

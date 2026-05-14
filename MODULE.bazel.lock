@@ -508,7 +508,7 @@
     },
     "//third_party/caliptra:extensions.bzl%caliptra_repos": {
       "general": {
-        "bzlTransitiveDigest": "8cEFLBZLSpLCUIwJNo9rxhRQdKOh+hDpG+Qoj+4YU+k=",
+        "bzlTransitiveDigest": "IqbLLgyVsd8umITqf9vzEn8cxGEZMWhiE7hasq8/sl4=",
         "usagesDigest": "ODX7jX2XQ5ywJ6htOZNVOezD0lY5SqvrMRMaa38fSMQ=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -548,7 +548,7 @@
     },
     "//third_party/hsm:extensions.bzl%hsm": {
       "general": {
-        "bzlTransitiveDigest": "dMr6eMmFrHzjZoSlJF19xOQiEGyEWeYgBcnHpSIo8uY=",
+        "bzlTransitiveDigest": "DkekJx1MaT5hLoVEIe08+tkv3G0Gz09HqjAs4OHpHLY=",
         "usagesDigest": "gbze9F5NvSkv3y6dQhVG6h7LR50p7DQQUEx+Uoy8E/s=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},

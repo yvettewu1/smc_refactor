@@ -355,7 +355,8 @@ impl FlashBackend for Ast10x0FlashBackend {
         let id = self.with_flash(key, |flash| flash.jedec_id())?;
         Ok(id != [0x00, 0x00, 0x00] && id != [0xFF, 0xFF, 0xFF])
     }
-
+    // this will use default Memory read mode 
+    // It can read data directly from AHB bus or Use DMA Read in Memory Mode 
     fn read(
         &mut self,
         key: ChipSelect,
@@ -382,8 +383,7 @@ impl FlashBackend for Ast10x0FlashBackend {
         // (alignment of address, length, and DRAM pointer; non-trivial
         // length). CS1 falls through because the HAL hardcodes the CS0
         // segment register inside `Smc::dma_read`.
-        let dma_eligible = key == ChipSelect::Cs0
-            && out.len() >= DMA_THRESHOLD
+        let dma_eligible = out.len() >= DMA_THRESHOLD
             && address.is_multiple_of(4)
             && out.len().is_multiple_of(4)
             && (out.as_ptr() as usize).is_multiple_of(4);
@@ -397,10 +397,10 @@ impl FlashBackend for Ast10x0FlashBackend {
             Ok(v) => v,
             Err(_) => return Err(BackendError::InvalidLength),
         };
-
+        cs
         let r = match &mut self.controller {
-            ControllerBackend::Fmc(fmc) => fmc.dma_read(address, dram_addr, len_u32),
-            ControllerBackend::Spi(spi) => spi.dma_read(address, dram_addr, len_u32),
+            ControllerBackend::Fmc(fmc) => fmc.dma_read(key, address, dram_addr, len_u32),
+            ControllerBackend::Spi(spi) => spi.dma_read(key, address, dram_addr, len_u32),
         };
         r.map_err(smc_to_backend_error)?;
 

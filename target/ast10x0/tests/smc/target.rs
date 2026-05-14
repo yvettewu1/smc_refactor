@@ -20,7 +20,7 @@
 #![no_std]
 #![no_main]
 
-use ast10x0_peripherals::smc::{FlashConfig, SmcConfig, SmcController, SmcError, SmcTopology, UninitSmc};
+use ast10x0_peripherals::smc::{FlashConfig, SmcConfig, SmcController, SmcError, SmcTopology, UninitSmc, ChipSelect};
 use cortex_m_semihosting::debug::{EXIT_FAILURE, EXIT_SUCCESS, exit};
 use target_common::{TargetInterface, declare_target};
 use {console_backend as _, entry as _};
@@ -56,8 +56,9 @@ fn run_smc_smoke_test() -> Result<(), SmcError> {
     // --- 2. PIO read — success path ---
     // Confirm the call succeeds and returns the correct byte count.  Flash
     // content is not inspected so this is safe on both QEMU and silicon.
+    // TODO: test CS0 for now. need to test CS1
     let mut buf = [0u8; 8];
-    let n = controller.read(0, &mut buf)?;
+    let n = controller.read(ChipSelect::Cs0, 0, &mut buf)?;
     if n != 8 {
         return Err(SmcError::HardwareError);
     }
@@ -66,7 +67,7 @@ fn run_smc_smoke_test() -> Result<(), SmcError> {
     // 1 MB capacity = 0x10_0000 bytes.  Offset 0xFFFFF with len 8 crosses the
     // boundary; validate_mapped_range must reject it before any MMIO access.
     let mut overflow_buf = [0u8; 8];
-    match controller.read(0x000F_FFFF, &mut overflow_buf) {
+    match controller.read(ChipSelect::Cs0, 0x000F_FFFF, &mut overflow_buf) {
         Err(SmcError::InvalidCapacity) => {}
         Err(other) => return Err(other),
         Ok(_) => return Err(SmcError::HardwareError),
@@ -76,7 +77,7 @@ fn run_smc_smoke_test() -> Result<(), SmcError> {
     // dma_enabled: false in the config above; dma_read must return
     // DmaNotEnabled before touching any hardware.  Argument validation
     // (alignment, bounds) is covered by unit tests in helpers.rs.
-    match controller.dma_read(0, 0x2, 256) {
+    match controller.dma_read(ChipSelect::Cs0, 0, 0x2, 256) {
         Err(SmcError::DmaNotEnabled) => Ok(()),
         Err(other) => Err(other),
         Ok(()) => Err(SmcError::HardwareError),
