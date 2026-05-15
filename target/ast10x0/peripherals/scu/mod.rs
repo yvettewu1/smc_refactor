@@ -10,7 +10,6 @@ pub mod clock;
 pub mod routing;
 pub mod status;
 pub mod pinctrl;
-
 pub use registers::ScuRegisters;
 pub use pinctrl::PinctrlPin;
 pub use types::{

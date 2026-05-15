@@ -8,8 +8,6 @@ rust_library(
     name = "ast10x0_board",
     srcs = [
         "src/lib.rs",
-        "src/spim_wiring.rs",
-        "src/monitor.rs",
     ],
     crate_name = "ast10x0_board",
     edition = "2024",
