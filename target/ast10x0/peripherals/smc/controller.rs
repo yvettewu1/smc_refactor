@@ -105,7 +105,7 @@ impl Smc<Uninitialized> {
         // - SPI-specific control: HostSpi variant may require specific register programming
         //
         // The topology is consulted via self.config.topology.
-
+        pw_log::info!("=== init()===");
         // 1. Configure flash types and write-enable per CS
         let mut conf = 0u32;
         if self.config.cs0.is_some() {
@@ -130,6 +130,9 @@ impl Smc<Uninitialized> {
             Self::configure_timing(&self, 1, &cs_cfg)?;
         }
 
+        //TODO :: manually set time in SPI04
+        self.regs.write_addr_width(0x2a33);
+
         // 3. Set up segment addresses (memory mapping)
         Self::setup_segments(&self)?;
 
@@ -137,12 +140,17 @@ impl Smc<Uninitialized> {
         // CS1 value is captured even if cs1 is None (safe: register read is harmless).
         let cs0_normal_read = self.regs.read_cs0_ctrl();
         let cs1_normal_read = self.regs.read_cs1_ctrl();
+         pw_log::info!("cs0_normal_read: 0x{:08x} cs1_normal_read:0x{:08x}",
+            cs0_normal_read as u32,
+            cs1_normal_read as u32);
 
         // Compute per-CS AHB flash window base addresses.
         let base = self.controller_id.flash_window_address();
         let cs0_size = flash_capacity_bytes(self.config.cs0).unwrap_or(0);
         let flash_window_base = [base, base + cs0_size];
-
+        pw_log::info!("flash_window_address: 0x{:08x} flash_capacity_bytes:0x{:08x}",
+            flash_window_base[0] as u32,
+            cs0_size as u32);
         Ok(Smc {
             regs: self.regs,
             controller_id: self.controller_id,
@@ -157,9 +165,9 @@ impl Smc<Uninitialized> {
     fn spi_read_init(&self, cs: ChipSelect) {
         let mode: TransferMode = TransferMode::Mode114;
         let dummy: u32 = 0x1;
-
+        pw_log::info!("=== spi_read_init()===");
         //TODO: SPI_NOR_CMD_QREAD (1-1-4)
-        let read_cmd = mode.cmd_io_bits()
+        let read_cmd = mode.data_io_bits()
             | (0x6C << 16)
             | (dummy << 6)
             | ASPEED_SPI_NORMAL_READ;
@@ -181,7 +189,7 @@ impl Smc<Uninitialized> {
         //
         // For now, all topologies use a single divider lookup; no HCLK sweep.
         // Phase 3+: add conditional calibration logic per topology and master_idx.
-        
+        pw_log::info!("=== configure_timing()===");
         //TODO: need to get this from scu register
         let sysclk_mhz = 200u32;
         let encoded_div = spi_freq_div(sysclk_mhz, config.spi_clock_mhz)?;
@@ -220,6 +228,9 @@ impl Smc<Uninitialized> {
         let cs0_size = flash_capacity_bytes(self.config.cs0)?;
         let cs1_size = flash_capacity_bytes(self.config.cs1)?;
         total_capacity_bytes(self.config.cs0, self.config.cs1)?;
+        pw_log::info!("=== setup_segments() cs0 size: 0x{:08x} cs1_size:0x{:08x}===",
+            cs0_size as u32,
+            cs1_size as u32);
 
         if cs0_size > 0 {
             let seg = encode_segment(0, cs0_size)?;
@@ -230,7 +241,7 @@ impl Smc<Uninitialized> {
             let seg = encode_segment(cs0_size, cs0_size + cs1_size)?;
             self.regs.write_cs1_segment(seg);
         }
-
+        
         Ok(())
     }
 }
@@ -246,7 +257,10 @@ impl Smc<Ready> {
         let window = self.flash_window_base[cs_idx] as *const u8;
         let offset = validate_mapped_range(offset, buf.len(), capacity_bytes)?;
         let flash_ptr = window.wrapping_add(offset);
-
+        pw_log::info!("read: offset0x{:08x}, size:0x{:08x}, flash ptr:0x{:08x}",
+            offset as u32,
+            buf.len() as u32,
+            flash_ptr as u32);
         // SAFETY: `flash_ptr` is derived from the controller's fixed MMIO flash
         // window using `wrapping_add`, which avoids imposing Rust allocation
         // provenance rules on the raw address arithmetic itself. The actual read

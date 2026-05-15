@@ -169,16 +169,16 @@ pub(crate) fn validate_dma_read(
 
 /// Encode a memory segment into hardware register format.
 ///
-/// Hardware uses 4 KB units for addressing.
+/// Hardware uses 512 KB units for addressing.
 pub(crate) fn encode_segment(start: usize, end: usize) -> Result<u32, SmcError> {
-    let start_4k = (start >> 12) as u32;
-    let end_4k = (end >> 12) as u32;
+    let start_512k = (start >> 20) as u32;
+    let end_512k = ((end >> 20) - 1 ) as u32;
 
-    if start_4k > 0xFFFF || end_4k > 0xFFFF {
+    if start_512k > 0xFFFF || end_512k > 0xFFFF {
         return Err(SmcError::InvalidCapacity);
     }
 
-    Ok((end_4k << 16) | start_4k)
+    Ok((end_512k << 16) | start_512k)
 }
 
 /// Calculate AST-compatible SPI clock divider field for CS control registers.

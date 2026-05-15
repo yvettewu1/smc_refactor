@@ -63,6 +63,7 @@ rust_library(
         "@rust_crates//:embedded-storage",
         "@rust_crates//:embedded-io",
         "@rust_crates//:nb",
+        "@pigweed//pw_log/rust:pw_log",
     ],
     proc_macro_deps = [
         "@rust_crates//:paste",

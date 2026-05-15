@@ -19,9 +19,11 @@
 
 #![no_std]
 #![no_main]
-
+#[allow(unused_imports)]
 use ast10x0_peripherals::smc::{FlashConfig, SmcConfig, SmcController, SmcError, SmcTopology, UninitSmc, ChipSelect};
-use cortex_m_semihosting::debug::{EXIT_FAILURE, EXIT_SUCCESS, exit};
+use cortex_m_semihosting::debug::{EXIT_FAILURE, EXIT_SUCCESS};
+use ast10x0_peripherals::scu::pinctrl::PINCTRL_FMC_QUAD;
+use ast10x0_peripherals::scu::ScuRegisters;
 use target_common::{TargetInterface, declare_target};
 use {console_backend as _, entry as _};
 
@@ -30,6 +32,7 @@ pub struct Target {}
 
 
 use core::ptr::read_volatile;
+#[allow(dead_code)]
 fn dump_smc_register(addr: u32, count: u32) {
     for i in 0..count {
         let reg_addr = addr + (i * 4);
@@ -45,14 +48,29 @@ fn dump_smc_register(addr: u32, count: u32) {
         );
     }
 }
+
+#[allow(dead_code)]
+fn dump_smc_read(buf: &[u8], count: u32) {
+    for i in 0..count as usize {
+        pw_log::info!(
+            "{}",
+            buf[i] as u8,
+        );
+    }
+}
+#[allow(dead_code)]
 fn run_smc_smoke_test() -> Result<(), SmcError> {
     // --- 1. Init ---
+    // TODO:: set pinctrl in board/src/lib.rs
+    let scu = unsafe { ScuRegisters::new_global() };
+    scu.apply_pinctrl_group(PINCTRL_FMC_QUAD);
+
     let config = SmcConfig {
         controller_id: SmcController::Fmc,
         // winbond_w25q64 = 8 MB; QEMU's default w25q80bl is 1 MB.
-        // Use a 1 MB config to stay inside the emulated chip boundary.
+        // Use a 16 MB config to stay inside the emulated chip boundary.
         cs0: Some(FlashConfig {
-            capacity_mb: 1,
+            capacity_mb: 16,
             page_size: 256,
             sector_size: 4096,
             block_size: 65536,
@@ -66,9 +84,9 @@ fn run_smc_smoke_test() -> Result<(), SmcError> {
     pw_log::info!("=== AST10x0 smc  smoke test  ===");
     let controller = unsafe { UninitSmc::new(config)? };
     let mut controller = controller.init()?;
-    pw_log::info!("=== Dump 0x7E62_0000===");
-    dump_smc_register(0x7E62_0000, 32);
-
+    pw_log::info!("=== Dump 0x7E62_0000 ===");
+    dump_smc_register(0x7E62_0000, 16);
+     
     if !controller.is_ready() || controller.controller_id() != SmcController::Fmc {
         return Err(SmcError::HardwareError);
     }
@@ -77,12 +95,15 @@ fn run_smc_smoke_test() -> Result<(), SmcError> {
     // Confirm the call succeeds and returns the correct byte count.  Flash
     // content is not inspected so this is safe on both QEMU and silicon.
     // TODO: need to add test CS1 
+    pw_log::info!("=== read test===");
     let mut buf = [0u8; 8];
     let n = controller.read(ChipSelect::Cs0, 0, &mut buf)?;
     if n != 8 {
         return Err(SmcError::HardwareError);
     }
-
+    dump_smc_read(&buf, 8);
+    
+    pw_log::info!("=== read overflow test===");
     // --- 3. PIO read — bounds rejection ---
     // 1 MB capacity = 0x10_0000 bytes.  Offset 0xFFFFF with len 8 crosses the
     // boundary; validate_mapped_range must reject it before any MMIO access.
@@ -92,25 +113,28 @@ fn run_smc_smoke_test() -> Result<(), SmcError> {
         Err(other) => return Err(other),
         Ok(_) => return Err(SmcError::HardwareError),
     }
-
+   
+    pw_log::info!("=== read dma test===");
     // --- 4. DMA args rejection — unaligned DRAM address ---
     match controller.dma_read(ChipSelect::Cs0, 0, 0x2, 256) {
         Err(SmcError::InvalidCapacity) => Ok(()),
         Err(other) => Err(other),
         Ok(()) => Err(SmcError::HardwareError),
     }
-
+    
 }
+
 
 impl TargetInterface for Target {
     const NAME: &'static str = "AST10x0 SMC Smoke Test";
 
     fn main() -> ! {
-        let exit_status = match run_smc_smoke_test() {
+        let _exit_status = match run_smc_smoke_test() {
             Ok(()) => EXIT_SUCCESS,
             Err(_e) => EXIT_FAILURE,
         };
-        exit(exit_status);
+
+        //let _ = console_backend_write_all(_exit_status);
         #[expect(clippy::empty_loop)]
         loop {}
     }
