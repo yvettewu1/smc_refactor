@@ -14,8 +14,6 @@
 use ast10x0_peripherals::smc::{FlashConfig, SmcConfig, SmcController, SmcTopology};
 use ast10x0_peripherals::scu::{PinctrlPin, ScuRegisters};
 use ast10x0_peripherals::spimonitor::MonitorPolicy;
-use ast10x0_peripherals::scu::registers::ScuRegisters;
-use ast10x0_peripherals::scu::pinctrl::PinctrlPin;
 use ast10x0_peripherals::spimonitor::registers::{SpiMonitorController, SpiMonitorRegisters};
 use ast10x0_peripherals::spimonitor::LockedSpiMonitor;
 
@@ -166,7 +164,7 @@ impl Ast10x0BoardDescriptor {
     /// Dual-CS variant of the FMC default. CS1 mirrors CS0's geometry; on
     /// QEMU CS1 is unconnected so JEDEC reads return `0xFF` and writes
     /// surface as `IoError`. The descriptor itself is environment-agnostic
-    /// — clients keyed off CS1 see a coherent device whose physical state
+    /// clients keyed off CS1 see a coherent device whose physical state
     /// depends on the board.
     pub fn ast10x0_qemu_default_dual_cs() -> Self {
         let cs0 = FlashConfig {
@@ -223,13 +221,13 @@ impl Ast10x0BoardDescriptor {
     // above): aspeed `SPI0` = smc-work `Spi1`, aspeed `SPI1` = smc-work
     // `Spi2`.
     //
-    // Caveats — read before flashing real silicon:
+    // Caveats : read before flashing real silicon:
     // 1. **Capacity is the test ceiling, not chip read.** SPI controllers
     //    use 64 MB (`SPI_CS*_CAPACITY = 0x0400_0000`), which sized
     //    aspeed-rust's tests; the actual EVB part may be smaller. Confirm
     //    against the schematic / JEDEC ID before trusting `info()`
     //    capacity. The Macronix MX25L8006E reference at spitest.rs:64 is
-    //    1 MB and is just where page/sector defaults come from — not the
+    //    1 MB and is just where page/sector defaults come from : not the
     //    SPI part.
     // 2. **Pinctrl is NOT carried.** aspeed-rust applies
     //    `PINCTRL_FMC_QUAD` / `PINCTRL_SPIM0_QUAD_DEFAULT` /
@@ -242,21 +240,21 @@ impl Ast10x0BoardDescriptor {
     // 3. **Quad pins are committed, quad transfer modes are not wired.**
     //    Even with quad pinctrl applied externally, OpenPRoT today does
     //    not program quad-IO into the CS control register (parity-gaps
-    //    §D3). AHB reads will run at 1-1-1 regardless of pin width until
+    //    D3). AHB reads will run at 1-1-1 regardless of pin width until
     //    D3 lands.
     // 4. **`master_idx` / `ctrl_type` are not modeled.** aspeed-rust
     //    uses these to gate timing-calibration skipping and SPIM
-    //    bracketing (parity-gaps §B11). The constructors here pick the
+    //    bracketing (parity-gaps B11). The constructors here pick the
     //    `_via_spimN` wiring corresponding to aspeed-rust's choice but
     //    cannot encode the calibration-skip rule.
     // 5. **Target frequency, not measured bus speed.** aspeed-rust's
     //    50 MHz target feeds `spi_freq_div`, which picks the closest
     //    divisor *below* target. With HCLK currently hard-coded to
-    //    200 MHz in OpenPRoT (parity-gaps §D7), the actual SCK rate
+    //    200 MHz in OpenPRoT (parity-gaps D7), the actual SCK rate
     //    will only match silicon when HCLK is also 200 MHz.
     //
     // Geometry shared by all three controllers below (Macronix MX25L8006E
-    // and equivalents — see `aspeed-rust/src/spi/spitest.rs:64-65`):
+    // and equivalents : see `aspeed-rust/src/spi/spitest.rs:64-65`):
     //   page_size = 256, sector_size = 4096, block_size = 65536.
     // Target SCK = 50 MHz (aspeed-rust spitest.rs:87/100/113).
 
@@ -313,13 +311,13 @@ impl Ast10x0BoardDescriptor {
     /// Source: `aspeed-rust/src/spi/spitest.rs:105-116, 60-61`. aspeed-rust
     /// re-routes CS1 through SPIM3 mid-test (spitest.rs:710-714); that
     /// per-transaction reroute is incompatible with OpenPRoT's lock-once
-    /// SPIPF model (parity-gaps §B10). The descriptor here keeps both
+    /// SPIPF model (parity-gaps B10). The descriptor here keeps both
     /// CSes on SPIM2; CS1 access requires a separate descriptor or a
     /// reworked SPIPF flow. Kernel pinctrl groups required:
     /// `PINCTRL_SPIM2_PINCTRL0`, `PINCTRL_SPIM3_PINCTRL0`,
     /// `PINCTRL_SPI2_QUAD`.
-    /// **`timing_calibration_disabled = false` in aspeed-rust** — the
-    /// only controller that enables calibration. Until parity-gaps §D9
+    /// **`timing_calibration_disabled = false` in aspeed-rust** : the
+    /// only controller that enables calibration. Until parity-gaps D9
     /// lands, this descriptor relies on POR timing.
     pub fn ast1060_evb_spi2_aspeed_rust_derived() -> Self {
         let cfg = FlashConfig {
@@ -347,8 +345,8 @@ impl Ast10x0BoardDescriptor {
 /// orchestration interfaces (Monitor, etc.) to boot code and tests.
 ///
 /// Tracks region counts in memory (following aspeed-rust pattern):
-/// - `read_blocked_region_count`: number of configured read-blocked regions
-/// - `write_blocked_region_count`: number of configured write-blocked regions
+///  `read_blocked_region_count`: number of configured read-blocked regions
+///  `write_blocked_region_count`: number of configured write-blocked regions
 ///
 /// # Example
 ///
@@ -370,9 +368,9 @@ impl Ast1060Board {
     /// # Safety
     ///
     /// Caller must ensure:
-    /// - This is called only once during boot (or once per test phase)
-    /// - No other code holds references to any hardware register blocks
-    /// - This instance maintains exclusive ownership until dropped
+    ///  This is called only once during boot (or once per test phase)
+    ///  No other code holds references to any hardware register blocks
+    ///  This instance maintains exclusive ownership until dropped
     #[allow(unsafe_op_in_unsafe_fn)]
     pub unsafe fn init() -> Self {
         Self {
@@ -391,10 +389,10 @@ impl Ast1060Board {
     /// Get a Monitor orchestrator for SPI security operations.
     ///
     /// The Monitor provides a unified interface to:
-    /// - Control external mux (via SCU routing)
-    /// - Manage address privilege filters (via SPIPF)
-    /// - Lock and verify policies
-    /// - Perform resets
+    ///  Control external mux (via SCU routing)
+    ///  Manage address privilege filters (via SPIPF)
+    ///  Lock and verify policies
+    ///  Perform resets
     pub fn monitor(&mut self) -> Ast1060Monitor<'_> {
         Ast1060Monitor::new(
             &mut self.scu,
