@@ -86,7 +86,7 @@ fn run_smc_smoke_test() -> Result<(), SmcError> {
     let mut controller = controller.init()?;
     pw_log::info!("=== Dump 0x7E62_0000 ===");
     dump_smc_register(0x7E62_0000, 16);
-     
+     dump_smc_register(0x8000_0000, 16);
     if !controller.is_ready() || controller.controller_id() != SmcController::Fmc {
         return Err(SmcError::HardwareError);
     }

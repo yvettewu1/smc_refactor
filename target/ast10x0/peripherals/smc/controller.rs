@@ -131,7 +131,7 @@ impl Smc<Uninitialized> {
         }
 
         //TODO :: manually set time in SPI04
-        self.regs.write_addr_width(0x2a33);
+        //self.regs.write_addr_width(0x2a33);
 
         // 3. Set up segment addresses (memory mapping)
         Self::setup_segments(&self)?;
@@ -168,7 +168,7 @@ impl Smc<Uninitialized> {
         pw_log::info!("=== spi_read_init()===");
         //TODO: SPI_NOR_CMD_QREAD (1-1-4)
         let read_cmd = mode.data_io_bits()
-            | (0x6C << 16)
+            | (0x6b << 16)
             | (dummy << 6)
             | ASPEED_SPI_NORMAL_READ;
 
