@@ -29,7 +29,6 @@ use {console_backend as _, entry as _};
 pub struct Target {}
 
 
-/*
 use core::ptr::read_volatile;
 fn dump_smc_register(addr: u32, count: u32) {
     for i in 0..count {
@@ -41,12 +40,11 @@ fn dump_smc_register(addr: u32, count: u32) {
 
         pw_log::info!(
             "SMC[0x{:08x}] = 0x{:08x}",
-            reg_addr,
-            reg
+            reg_addr as u32,
+            reg as u32
         );
     }
 }
-*/
 fn run_smc_smoke_test() -> Result<(), SmcError> {
     // --- 1. Init ---
     let config = SmcConfig {
@@ -65,11 +63,11 @@ fn run_smc_smoke_test() -> Result<(), SmcError> {
         enable_interrupts: false,
         topology: SmcTopology::BootSpi { master_idx: 0 },
     };
-    pw_log::info!("=== AST10x0 smc  smoke test ===");
+    pw_log::info!("=== AST10x0 smc  smoke test  ===");
     let controller = unsafe { UninitSmc::new(config)? };
     let mut controller = controller.init()?;
-    pw_log::info!("=== after init ===");
-    //dump_smc_register(0x7E62_0000, 32);
+    pw_log::info!("=== Dump 0x7E62_0000===");
+    dump_smc_register(0x7E62_0000, 32);
 
     if !controller.is_ready() || controller.controller_id() != SmcController::Fmc {
         return Err(SmcError::HardwareError);
