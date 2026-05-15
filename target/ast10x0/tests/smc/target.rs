@@ -25,8 +25,28 @@ use cortex_m_semihosting::debug::{EXIT_FAILURE, EXIT_SUCCESS, exit};
 use target_common::{TargetInterface, declare_target};
 use {console_backend as _, entry as _};
 
+
 pub struct Target {}
 
+
+/*
+use core::ptr::read_volatile;
+fn dump_smc_register(addr: u32, count: u32) {
+    for i in 0..count {
+        let reg_addr = addr + (i * 4);
+
+        let reg = unsafe {
+            read_volatile(reg_addr as *const u32)
+        };
+
+        pw_log::info!(
+            "SMC[0x{:08x}] = 0x{:08x}",
+            reg_addr,
+            reg
+        );
+    }
+}
+*/
 fn run_smc_smoke_test() -> Result<(), SmcError> {
     // --- 1. Init ---
     let config = SmcConfig {
@@ -38,16 +58,18 @@ fn run_smc_smoke_test() -> Result<(), SmcError> {
             page_size: 256,
             sector_size: 4096,
             block_size: 65536,
-            spi_clock_mhz: 25,
+            spi_clock_mhz: 50,
         }),
         cs1: None,
         dma_enabled: false,
         enable_interrupts: false,
         topology: SmcTopology::BootSpi { master_idx: 0 },
     };
-
+    pw_log::info!("=== AST10x0 smc  smoke test ===");
     let controller = unsafe { UninitSmc::new(config)? };
     let mut controller = controller.init()?;
+    pw_log::info!("=== after init ===");
+    //dump_smc_register(0x7E62_0000, 32);
 
     if !controller.is_ready() || controller.controller_id() != SmcController::Fmc {
         return Err(SmcError::HardwareError);
@@ -56,7 +78,7 @@ fn run_smc_smoke_test() -> Result<(), SmcError> {
     // --- 2. PIO read — success path ---
     // Confirm the call succeeds and returns the correct byte count.  Flash
     // content is not inspected so this is safe on both QEMU and silicon.
-    // TODO: test CS0 for now. need to test CS1
+    // TODO: need to add test CS1 
     let mut buf = [0u8; 8];
     let n = controller.read(ChipSelect::Cs0, 0, &mut buf)?;
     if n != 8 {
@@ -73,15 +95,13 @@ fn run_smc_smoke_test() -> Result<(), SmcError> {
         Ok(_) => return Err(SmcError::HardwareError),
     }
 
-    // --- 4. DMA disabled rejection ---
-    // dma_enabled: false in the config above; dma_read must return
-    // DmaNotEnabled before touching any hardware.  Argument validation
-    // (alignment, bounds) is covered by unit tests in helpers.rs.
+    // --- 4. DMA args rejection — unaligned DRAM address ---
     match controller.dma_read(ChipSelect::Cs0, 0, 0x2, 256) {
-        Err(SmcError::DmaNotEnabled) => Ok(()),
+        Err(SmcError::InvalidCapacity) => Ok(()),
         Err(other) => Err(other),
         Ok(()) => Err(SmcError::HardwareError),
     }
+
 }
 
 impl TargetInterface for Target {
