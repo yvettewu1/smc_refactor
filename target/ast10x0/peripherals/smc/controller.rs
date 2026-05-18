@@ -130,9 +130,6 @@ impl Smc<Uninitialized> {
             Self::configure_timing(&self, 1, &cs_cfg)?;
         }
 
-        //TODO :: manually set time in SPI04
-        //self.regs.write_addr_width(0x2a33);
-
         // 3. Set up segment addresses (memory mapping)
         Self::setup_segments(&self)?;
 
@@ -173,7 +170,8 @@ impl Smc<Uninitialized> {
             | ASPEED_SPI_NORMAL_READ;
 
         self.regs.write_cs_ctrl(cs, read_cmd);
-        self.regs.write_addr_width(1);        
+        //TODO: need to determin the address width by the command
+        self.regs.write_addr_width(0x0);       
     }
     
     fn configure_timing(&self, cs: usize, config: &FlashConfig) -> Result<(), SmcError> {
