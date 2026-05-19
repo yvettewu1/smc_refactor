@@ -11,7 +11,7 @@ use crate::smc::types::SmcConfig;
 use crate::smc::types::SmcError;
 
 const SMC_WINDOW_SIZE_BYTES: usize = 256 * 1024 * 1024;
-const DMA_DRAM_MASK: u32 = 0x000BFFFC;
+const DMA_MAX_TRANSFER_LENGTH: u32 = 0x20_0000; // 32MBytes 
 pub(crate) const SPI_CTRL_FREQ_MASK: u32 = 0x0F00_0F00;
 
 /// DMA engine's base address for flash-side memory (fmc084 / spi084).
@@ -42,6 +42,10 @@ pub(crate) const SPI_DMA_REQUEST: u32 = 1 << 31;
 /// Reads as 0 on FMC (Reserved).
 pub(crate) const SPI_DMA_GRANT: u32 = 1 << 30;
 
+pub(crate) const SPI_DMA_CALIB_MODE: u32 = 1 << 3;
+pub(crate) const SPI_DMA_CALC_CKSUM: u32 = 1 << 2;
+pub(crate) const SPI_DMA_ENABLE: u32 = 1 << 0;
+
 /// Validated parameters for a DMA read operation, ready to be written to hardware registers.
 ///
 /// Produced by [`validate_dma_read`] after bounds-checking and address translation.
@@ -53,9 +57,10 @@ pub(crate) struct ValidatedDmaRead {
     pub flash_start: usize,
     /// DMA engine DRAM-side address (written to fmc088 / spi088).
     ///
-    /// Must be 4-byte aligned and satisfy the hardware mask (`DMA_DRAM_MASK`).
+    /// Must be 4-byte aligned 
     pub dram_addr: u32,
     /// Value to write to the DMA length register (transfer length minus one).
+    /// [0:24] 0x1F_FFFF:32Mbytes
     pub dma_len_reg: u32,
 }
 
@@ -119,47 +124,40 @@ pub(crate) fn validate_mapped_range(
 /// EVD-20260511-dma-flash-offset-encodes-cs for the full rationale.
 pub(crate) fn validate_dma_read(
     flash_offset: u32,
-    flash_window_base: [usize; 2],
-    cs0_capacity: usize,
+    flash_win_base: usize,
+    cs_capacity: usize,
     dram_addr: usize,
-    len: u32,
-    capacity_bytes: usize,
+    len: u32
 ) -> Result<ValidatedDmaRead, SmcError> {
-    if len == 0 {
+    if len == 0 || len > DMA_MAX_TRANSFER_LENGTH {
         return Err(SmcError::InvalidCapacity);
     }
-
+    
     // Flash offset must be 4-byte aligned (spec §1.3, matching aspeed-rust).
     if flash_offset & 0x3 != 0 {
         return Err(SmcError::InvalidCapacity);
     }
 
     // Bounds-check the controller-relative offset.
-    let _ = validate_mapped_range(flash_offset, len as usize, capacity_bytes)?;
-
-    // Derive cs and within-CS offset from the controller-relative flash_offset.
-    // CS0 occupies [0, cs0_capacity); CS1 occupies [cs0_capacity, capacity_bytes).
-    let flash_offset = flash_offset as usize;
-    let (cs, cs_offset) = if flash_offset < cs0_capacity {
-        (0, flash_offset)
-    } else {
-        (1, flash_offset - cs0_capacity)
-    };
+    let _ = validate_mapped_range(flash_offset, len as usize, cs_capacity)?;
 
     // Compute the DMA engine's flash address (written to fmc084/spi084).
     // Formula from aspeed-rust fmccontroller.rs::read_dma:
     //   fmc084 = decode_addr[cs].start + op.address.value - SPI_DMA_FLASH_MAP_BASE
     //          = flash_window_base[cs] - SPI_DMA_FLASH_MAP_BASE + cs_offset
-    let flash_start = flash_window_base[cs]
+    let base = flash_win_base
         .checked_sub(SPI_DMA_FLASH_MAP_BASE)
-        .and_then(|base| base.checked_add(cs_offset))
+        .ok_or(SmcError::InvalidCapacity)?;
+
+    let flash_start = base
+        .checked_add(flash_offset as usize)
         .ok_or(SmcError::InvalidCapacity)?;
 
     let dram_addr = u32::try_from(dram_addr).map_err(|_| SmcError::InvalidCapacity)?;
-    if dram_addr & 0x3 != 0 || dram_addr != (dram_addr & DMA_DRAM_MASK) {
+    if dram_addr & 0x3 != 0 {
         return Err(SmcError::InvalidCapacity);
     }
-
+ 
     Ok(ValidatedDmaRead {
         flash_start,
         dram_addr,
@@ -207,6 +205,79 @@ pub(crate) fn spi_freq_div(sysclk_mhz: u32, max_freq_mhz: u32) -> Result<u32, Sm
 
     Ok(0)
 }
+/// Finds the midpoint of the longest consecutive sequence of 1's in a buffer.
+///
+/// Returns the midpoint index if the longest run is at least length 4,
+/// otherwise returns -1.
+///
+/// # Arguments
+/// * `buf` - slice of bytes (each should be 0 or 1).
+pub(crate) fn get_mid_point_of_longest_one(buf: &[u8]) -> Result<i32, SmcError> {
+    let mut start = 0;
+    let mut mid_point = 0;
+    let mut max_cnt = 0;
+    let mut cnt = 0;
+
+    for (i, &val) in buf.iter().enumerate() {
+        if val == 1 {
+            cnt += 1;
+        } else {
+            cnt = 0;
+            start = i;
+        }
+
+        if cnt > max_cnt {
+            max_cnt = cnt;
+            mid_point = start + (cnt / 2);
+        }
+    }
+
+    if max_cnt < 4 {
+        Ok(-1)
+    } else {
+        Ok(i32::try_from(mid_point).unwrap())
+    }
+}
+
+pub(crate) fn pick_best_delay(
+    calib_res: &[u8],
+) -> Result<Option<(u32, u32)>, SmcError> {
+    let calib_point = get_mid_point_of_longest_one(calib_res)?;
+
+    if calib_point < 0 {
+        Ok(None)
+    } else {
+        let hcycle = (calib_point / 17) as u32;
+        let delay_ns = (calib_point % 17) as u32;
+
+        Ok(Some((hcycle, delay_ns)))
+    }
+}
+
+pub(crate) fn spi_calibration_enable(buf: &[u8]) -> Result<bool, SmcError>  {
+    if buf.len() < 4 {
+        return Ok(false);
+    }
+
+    let mut valid_count = 0;
+
+    // Process 4 bytes at a time
+    for chunk in buf.chunks_exact(4) {
+        // Convert 4 bytes to u32 in little-endian order
+        let word = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+
+        if word != 0 && word != 0xFFFF_FFFF {
+            valid_count += 1;
+        }
+        if valid_count > 100 {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+
 
 #[cfg(test)]
 mod tests {
@@ -302,12 +373,12 @@ mod tests {
     // Expected fmc084 for CS0 offset 0x1000: 0x8000_0000 - 0x6000_0000 + 0x1000 = 0x2000_1000
     const TEST_WINDOW: [usize; 2] = [0x8000_0000, 0x8100_0000]; // CS0=16MB, CS1 starts at +16MB
     const TEST_CS0_CAP: usize = 16 * 1024 * 1024;
-    const TEST_CAP: usize = 16 * 1024 * 1024;
+    //const TEST_CAP: usize = 16 * 1024 * 1024;
 
     #[test]
     fn test_validate_dma_read_accepts_valid_request() {
         let validated = validate_dma_read(
-            0x1000, TEST_WINDOW, TEST_CS0_CAP, 0x0008_0000, 512, TEST_CAP,
+            0x1000, TEST_WINDOW, TEST_CS0_CAP, 0x0008_0000, 512
         ).unwrap();
         assert_eq!(validated.flash_start, 0x2000_1000); // 0x8000_0000 - 0x6000_0000 + 0x1000
         assert_eq!(validated.dram_addr, 0x0008_0000);
@@ -322,7 +393,7 @@ mod tests {
         const TOTAL_CAP: usize = 32 * 1024 * 1024;
         let cs1_offset = CS0_CAP + 0x1000;
         let validated = validate_dma_read(
-            cs1_offset as u32, DUAL_WINDOW, CS0_CAP, 0x0008_0000, 512, TOTAL_CAP,
+            cs1_offset as u32, DUAL_WINDOW, CS0_CAP, 0x0008_0000, 512
         ).unwrap();
         // fmc084 = 0x8100_0000 - 0x6000_0000 + 0x1000 = 0x2100_1000
         assert_eq!(validated.flash_start, 0x2100_1000);
@@ -331,31 +402,31 @@ mod tests {
 
     #[test]
     fn test_validate_dma_read_rejects_zero_length() {
-        let result = validate_dma_read(0, TEST_WINDOW, TEST_CS0_CAP, 0x0008_0000, 0, TEST_CAP);
+        let result = validate_dma_read(0, TEST_WINDOW, TEST_CS0_CAP, 0x0008_0000, 0);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_validate_dma_read_rejects_unaligned_flash_offset() {
-        let result = validate_dma_read(0x1001, TEST_WINDOW, TEST_CS0_CAP, 0x0008_0000, 256, TEST_CAP);
+        let result = validate_dma_read(0x1001, TEST_WINDOW, TEST_CS0_CAP, 0x0008_0000, 256);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_validate_dma_read_rejects_unaligned_dram() {
-        let result = validate_dma_read(0, TEST_WINDOW, TEST_CS0_CAP, 0x0008_0002, 256, TEST_CAP);
+        let result = validate_dma_read(0, TEST_WINDOW, TEST_CS0_CAP, 0x0008_0002, 256);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_validate_dma_read_rejects_masked_dram_bits() {
-        let result = validate_dma_read(0, TEST_WINDOW, TEST_CS0_CAP, 0x1000_0000, 256, TEST_CAP);
+        let result = validate_dma_read(0, TEST_WINDOW, TEST_CS0_CAP, 0x1000_0000, 256);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_validate_dma_read_rejects_flash_range_overflow() {
-        let result = validate_dma_read(0x00ff_ff00, TEST_WINDOW, TEST_CS0_CAP, 0x0008_0000, 0x200, TEST_CAP);
+        let result = validate_dma_read(0x00ff_ff00, TEST_WINDOW, TEST_CS0_CAP, 0x0008_0000, 0x200);
         assert!(result.is_err());
     }
 }

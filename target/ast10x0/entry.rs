@@ -53,6 +53,14 @@ unsafe fn jtag_init() {
 /// # Safety
 /// Caller must have exclusive early-boot ownership of SCU MMIO and must have
 /// already unlocked SCU write protection.
+unsafe fn disable_cache() {
+    // SAFETY: see function-level safety contract.
+    let scu = unsafe { &*ast1060_pac::Scu::ptr() };
+
+    // Disable cache.
+    scu.scua58().write(|w| unsafe { w.bits(0) });
+}
+#[allow(dead_code)]
 unsafe fn init_cache() {
     // SAFETY: see function-level safety contract.
     let scu = unsafe { &*ast1060_pac::Scu::ptr() };
@@ -84,7 +92,8 @@ unsafe fn pre_init() {
     jtag_init();
 
     // SAFETY: SCU is unlocked above; pre-init has exclusive ownership.
-    unsafe { init_cache() };
+   // unsafe { init_cache() };
+   unsafe { disable_cache() };
 }
 
 

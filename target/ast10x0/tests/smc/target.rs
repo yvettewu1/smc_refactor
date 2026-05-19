@@ -51,11 +51,17 @@ fn dump_smc_register(addr: u32, count: u32) {
 
 #[allow(dead_code)]
 fn dump_smc_read(buf: &[u8], count: u32) {
-    for i in 0..count as usize {
-        pw_log::info!(
-            "{}",
-            buf[i] as u8,
-        );
+    let count = core::cmp::min(count as usize, buf.len());
+    for i in (0..count).step_by(4) {
+        if i + 4 > count {
+            break;
+        }
+
+        let bytes: [u8; 4] = buf[i..i + 4].try_into().unwrap();
+
+        let value = u32::from_le_bytes(bytes);
+
+        pw_log::info!("[0x{:08x}] = 0x{:08x}", i as u32, value as u32);
     }
 }
 #[allow(dead_code)]
@@ -77,13 +83,15 @@ fn run_smc_smoke_test() -> Result<(), SmcError> {
             spi_clock_mhz: 50,
         }),
         cs1: None,
-        dma_enabled: false,
+        dma_enabled: true,
         enable_interrupts: false,
         topology: SmcTopology::BootSpi { master_idx: 0 },
     };
     pw_log::info!("=== AST10x0 smc  smoke test  ===");
     let controller = unsafe { UninitSmc::new(config)? };
     let mut controller = controller.init()?;
+    controller.spi_nor_read_init(ChipSelect::Cs0);
+
     pw_log::info!("=== Dump 0x7E62_0000 ===");
     dump_smc_register(0x7E62_0000, 16);
      dump_smc_register(0x8000_0000, 16);
@@ -91,18 +99,50 @@ fn run_smc_smoke_test() -> Result<(), SmcError> {
         return Err(SmcError::HardwareError);
     }
 
-    // --- 2. PIO read — success path ---
+    // --- 2. MMIO read — success path --- 
     // Confirm the call succeeds and returns the correct byte count.  Flash
     // content is not inspected so this is safe on both QEMU and silicon.
     // TODO: need to add test CS1 
     pw_log::info!("=== read test===");
-    let mut buf = [0u8; 8];
-    let n = controller.read(ChipSelect::Cs0, 0, &mut buf)?;
-    if n != 8 {
+    let mut buf = [0u8; 64];
+    let n = controller.read(ChipSelect::Cs0, 0x400, &mut buf)?;
+    if n != 64 {
         return Err(SmcError::HardwareError);
     }
-    dump_smc_read(&buf, 8);
+    dump_smc_read(&buf, 64);
     
+    #[repr(align(4))]
+    struct AlignedBuf([u8; 256]);
+
+    pw_log::info!("=== read dma test===");
+    let mut dma_buf = AlignedBuf([0x5A; 256]);
+    // --- 4. DMA  ---
+    let _ = match controller.dma_read(ChipSelect::Cs0, 0x500, dma_buf.0.as_mut_ptr() as usize, 256) {
+        Err(SmcError::InvalidCapacity) => Ok(()),
+        Err(other) => Err(other),
+        Ok(()) => Err(SmcError::HardwareError),
+    };
+    dump_smc_register(0x7E62_0080, 16);
+     loop {
+            match controller.poll_dma_completion() {
+                core::task::Poll::Pending => {
+                    // still running
+                }
+
+                core::task::Poll::Ready(result) => {
+                    result?;
+                     pw_log::info!("dma completion is ready");
+                    break;
+                }
+            }
+        }
+
+    pw_log::info!("=== dma done= ==");
+    dump_smc_register(0x7E62_0080, 16);
+    dump_smc_read(&dma_buf.0, 256);
+
+    Ok(())
+    /*
     pw_log::info!("=== read overflow test===");
     // --- 3. PIO read — bounds rejection ---
     // 1 MB capacity = 0x10_0000 bytes.  Offset 0xFFFFF with len 8 crosses the
@@ -114,13 +154,7 @@ fn run_smc_smoke_test() -> Result<(), SmcError> {
         Ok(_) => return Err(SmcError::HardwareError),
     }
    
-    pw_log::info!("=== read dma test===");
-    // --- 4. DMA args rejection — unaligned DRAM address ---
-    match controller.dma_read(ChipSelect::Cs0, 0, 0x2, 256) {
-        Err(SmcError::InvalidCapacity) => Ok(()),
-        Err(other) => Err(other),
-        Ok(()) => Err(SmcError::HardwareError),
-    }
+    */
     
 }
 

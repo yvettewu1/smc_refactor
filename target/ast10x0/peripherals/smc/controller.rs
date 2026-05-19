@@ -8,6 +8,7 @@ use core::marker::PhantomData;
 use crate::smc::helpers::{
     SPI_CTRL_FREQ_MASK, SPI_DMA_RAM_MAP_BASE, encode_segment, flash_capacity_bytes, spi_freq_div,
     total_capacity_bytes, validate_dma_read, validate_mapped_range,
+    spi_calibration_enable, SPI_DMA_ENABLE, SPI_DMA_CALC_CKSUM, SPI_DMA_CALIB_MODE, pick_best_delay
 };
 use crate::smc::interrupts::{SmcInterrupt, SmcInterruptDecoder};
 use crate::smc::registers::SmcRegisters;
@@ -31,6 +32,9 @@ const DMA_STATUS_RELEVANT_BITS: u32 = (1 << 11) | (1 << 10) | (1 << 9);
 /// Mask for bits that are not IO mode or mode-type fields — preserves
 /// frequency divisor and other config bits across per-phase ctrl writes.
 const SPI_CTRL_IO_MODE_MASK: u32 = !0x7000_0000;
+const SPI_CALIB_LEN: usize = 0x400;
+
+
 
 /// Type-state marker: controller is constructed but not initialized.
 pub struct Uninitialized;
@@ -100,10 +104,6 @@ impl Smc<Uninitialized> {
         // - NormalSpi { master_idx }: Normal user SPI path (typically SPI2, master_idx=2)
         //
         // Topology gates behavior in setup_segments() and configure_timing():
-        // - Decode-range sizing: shared-bus topologies (master_idx != 0) may restrict ranges
-        // - Calibration skip: shared-bus topologies may skip CS1 calibration
-        // - SPI-specific control: HostSpi variant may require specific register programming
-        //
         // The topology is consulted via self.config.topology.
         pw_log::info!("=== init()===");
         // 1. Configure flash types and write-enable per CS
@@ -111,26 +111,17 @@ impl Smc<Uninitialized> {
         if self.config.cs0.is_some() {
             conf |= 1 << 16; // CONF_ENABLE_W0
             conf |= 0x2 << 0; // FLASH_TYPE_SPI
-            let cs = ChipSelect::Cs0;
-            Self::spi_read_init(&self, cs);
         }
         if self.config.cs1.is_some() {
             conf |= 1 << 17; // CONF_ENABLE_W1
             conf |= 0x2 << 2; // FLASH_TYPE_SPI
-            let cs = ChipSelect::Cs0;
-            Self::spi_read_init(&self, cs);
+
         }
         self.regs.write_config(conf);
 
-        // 2. Configure timing for each CS
-        if let Some(cs_cfg) = self.config.cs0 {
-            Self::configure_timing(&self, 0, &cs_cfg)?;
-        }
-        if let Some(cs_cfg) = self.config.cs1 {
-            Self::configure_timing(&self, 1, &cs_cfg)?;
-        }
 
-        // 3. Set up segment addresses (memory mapping)
+
+        // 2. Set up segment addresses (memory mapping)
         Self::setup_segments(&self)?;
 
         // Snapshot per-CS normal-read control register values after all init writes.
@@ -158,57 +149,6 @@ impl Smc<Uninitialized> {
             _mode: PhantomData,
         })
     }
-    //TODO: call from nordevice layer instead 
-    fn spi_read_init(&self, cs: ChipSelect) {
-        let mode: TransferMode = TransferMode::Mode114;
-        let dummy: u32 = 0x1;
-        pw_log::info!("=== spi_read_init()===");
-        //TODO: SPI_NOR_CMD_QREAD (1-1-4)
-        let read_cmd = mode.data_io_bits()
-            | (0x6b << 16)
-            | (dummy << 6)
-            | ASPEED_SPI_NORMAL_READ;
-
-        self.regs.write_cs_ctrl(cs, read_cmd);
-        //TODO: need to determin the address width by the command
-        self.regs.write_addr_width(0x0);       
-    }
-    
-    fn configure_timing(&self, cs: usize, config: &FlashConfig) -> Result<(), SmcError> {
-        // Timing calibration is topology-aware.
-        //
-        // For BootSpi (FMC, master_idx=0): Full calibration sweep recommended.
-        //   Boot firmware has exclusive access; full timing margin is priority.
-        //
-        // For HostSpi / NormalSpi when master_idx != 0: Shared-bus topology.
-        //   When a secondary master shares the flash bus, calibration on CS1 may need
-        //   to be skipped to avoid interfering with the primary master's calibration.
-        //   Phase 3+: gate calibration logic on config.topology.master_idx().
-        //
-        // For now, all topologies use a single divider lookup; no HCLK sweep.
-        // Phase 3+: add conditional calibration logic per topology and master_idx.
-        pw_log::info!("=== configure_timing()===");
-        //TODO: need to get this from scu register
-        let sysclk_mhz = 200u32;
-        let encoded_div = spi_freq_div(sysclk_mhz, config.spi_clock_mhz)?;
-
-        match cs {
-            0 => {
-                let reg = self.regs.read_cs0_ctrl();
-                self.regs
-                    .write_cs0_ctrl((reg & !SPI_CTRL_FREQ_MASK) | encoded_div);
-            }
-            1 => {
-                let reg = self.regs.read_cs1_ctrl();
-                self.regs
-                    .write_cs1_ctrl((reg & !SPI_CTRL_FREQ_MASK) | encoded_div);
-            }
-            _ => return Err(SmcError::HardwareError),
-        }
-
-        Ok(())
-    }
-
     fn setup_segments(&self) -> Result<(), SmcError> {
         // Decode-range sizing is topology-aware.
         //
@@ -242,6 +182,7 @@ impl Smc<Uninitialized> {
         
         Ok(())
     }
+
 }
 
 impl Smc<Ready> {
@@ -250,10 +191,11 @@ impl Smc<Ready> {
     /// Reads directly from the flash memory window. Hardware automatically
     /// converts memory accesses to SPI transactions.
     pub fn read(&self, cs: ChipSelect, offset: u32, buf: &mut [u8]) -> Result<usize, SmcError> {
-        let capacity_bytes = total_capacity_bytes(self.config.cs0, self.config.cs1)?;
+        let cs_config = self.cs_config(cs)?;
+        let cs_capacity = flash_capacity_bytes(Some(cs_config))?;
         let cs_idx = cs as usize;
         let window = self.flash_window_base[cs_idx] as *const u8;
-        let offset = validate_mapped_range(offset, buf.len(), capacity_bytes)?;
+        let offset = validate_mapped_range(offset, buf.len(), cs_capacity)?;
         let flash_ptr = window.wrapping_add(offset);
         pw_log::info!("read: offset0x{:08x}, size:0x{:08x}, flash ptr:0x{:08x}",
             offset as u32,
@@ -283,25 +225,27 @@ impl Smc<Ready> {
         if cs == ChipSelect::Cs1 && self.config.cs1.is_none() {
             return Err(SmcError::InvalidChipSelect);
         }
-
-        let capacity_bytes = total_capacity_bytes(self.config.cs0, self.config.cs1)?;
+        pw_log::info!("dma_read()");
         let cs_config = self.cs_config(cs)?;
         let cs_capacity = flash_capacity_bytes(Some(cs_config))?;
+        pw_log::info!("flash_offset: 0x{:08x}, cs_cap: 0x{:08x}", 
+        flash_offset as u32,
+        cs_capacity as u32
+        );
+        let cs_idx = cs as usize;
+
         let validated = validate_dma_read(
             flash_offset,
-            self.flash_window_base,
+            self.flash_window_base[cs_idx],
             cs_capacity,
             dram_addr,
-            len,
-            capacity_bytes,
+            len    
         )?;
-
-        // Acquire the DMA bus arbiter before programming any DMA registers.
-        // On SPI1/SPI2: writes SPI_DMA_GET_REQ_MAGIC and spins until DMAGrant
-        // (bit 30 of spi080) is set. On FMC: bits 20–31 are Reserved — the write
-        // is a no-op and the spin condition is immediately false. Safe to call
-        // unconditionally on all controllers, matching aspeed-rust's approach.
-        self.regs.acquire_dma_arbiter();
+        pw_log::info!("flash start: 0x{:08x}, cs_cap: 0x{:08x}, dram_addr: 0x{:08x} len: 0x{:08x} ", 
+        validated.flash_start as u32,
+        cs_capacity as u32,
+        validated.dram_addr as u32,
+        len as u32);
 
         // Set CS0 control register to normal-read mode before programming DMA
         // registers. The DMA engine reads the CSx control register to know which
@@ -309,10 +253,17 @@ impl Smc<Ready> {
         // before the kick. Matches aspeed-rust fmccontroller.rs::read_dma
         // ctrl construction: preserve frequency bits, set ASPEED_SPI_NORMAL_READ.
         let cs_idx = cs as usize;
-        let ctrl_val = self.normal_read_ctrl[cs_idx] & SPI_CTRL_FREQ_MASK | 
-            ASPEED_SPI_NORMAL_READ;
+        let ctrl_val = self.normal_read_ctrl[cs_idx] | ASPEED_SPI_NORMAL_READ;
         self.regs.write_cs_ctrl(cs, ctrl_val);
-
+        pw_log::info!("cs ctrl value:0x{:08x}",  self.regs.read_cs_ctrl(cs) as u32);
+        
+        // Acquire the DMA bus arbiter before programming any DMA registers.
+        // On SPI1/SPI2: writes SPI_DMA_GET_REQ_MAGIC and spins until DMAGrant
+        // (bit 30 of spi080) is set. On FMC: bits 20–31 are Reserved — the write
+        // is a no-op and the spin condition is immediately false. Safe to call
+        // unconditionally on all controllers, matching aspeed-rust's approach.
+        self.regs.acquire_dma_arbiter();
+         pw_log::info!("done acquire_dma_arbiter()");
         // Program DMA registers in the order used by aspeed-rust fmccontroller.rs::read_dma:
         //   fmc084 = flash side DMA address (R_DMA_FLASH_ADDR)
         //            = flash_window_base[cs] - SPI_DMA_FLASH_MAP_BASE + cs_offset
@@ -363,9 +314,13 @@ impl Smc<Ready> {
         let dma_in_flight = self.state == SmcState::DmaInFlight;
         let decoded = SmcInterruptDecoder::decode_with_context(status, dma_in_flight);
         self.clear_dma_status(relevant);
+        pw_log::info!("complete dma status 0x{:08x}", status as u32);
+        pw_log::info!("after clear...read_dma_statusfmc08 :0x{:08x}",self.dma_status() as u32);
+        pw_log::info!("complete dma");
         match decoded {
             SmcInterrupt::DmaComplete => {
                 self.regs.disable_dma();
+                pw_log::info!("after disable...read_dma_statusfmc08 :0x{:08x}",self.dma_status() as u32);
                 self.state = SmcState::Idle;
                 Ok(decoded)
             }
@@ -427,6 +382,10 @@ impl Smc<Ready> {
         }
         core::task::Poll::Ready(self.complete_dma(status).map(|_| ()))
     }
+
+   pub fn poll_blocking_dma_completion(&self) {
+        while self.regs.read_dma_status() & DMA_STATUS_RELEVANT_BITS == 0 {}
+   }
 
     /// Check if controller is ready for operations.
     pub fn is_ready(&self) -> bool {
@@ -522,6 +481,197 @@ impl Smc<Ready> {
         self.regs.write_cs_ctrl(cs, self.normal_read_ctrl[cs_idx]);
         Ok(())
     }
+
+    //
+    // MMIO access:: nor read init 
+    //
+    //TODO: call from nordevice layer instead 
+   pub fn spi_nor_read_init(&mut self, cs: ChipSelect) {
+        let mode: TransferMode = TransferMode::Mode114;
+        let dummy: u32 = 0x1;
+        let cs_idx = cs as usize;
+        pw_log::info!("=== spi_read_init()===");
+        //TODO: SPI_NOR_CMD_QREAD (1-1-4) - 3byte
+        let read_cmd = mode.data_io_bits()
+            | (0x6b << 16)
+            | (dummy << 6)
+            | ASPEED_SPI_NORMAL_READ;
+
+        self.regs.write_cs_ctrl(cs, read_cmd);
+        //TODO: need to determine the address width by the command
+        // 1: 4 bytes
+        // 0: 3 bytes
+        self.regs.write_addr_width(0x2a00);     
+        // TODO: update normal_read_ctrl
+        self.normal_read_ctrl[cs_idx] = read_cmd;
+         let _ = self.timing_calibration(cs);
+    }
+    
+    fn configure_timing(&mut self, cs: ChipSelect, spi_clock_mhz: u32) -> Result<(), SmcError> {
+        // Timing calibration is topology-aware.
+        //
+        // For BootSpi (FMC, master_idx=0): Full calibration sweep recommended.
+        //   Boot firmware has exclusive access; full timing margin is priority.
+        //
+        // For HostSpi / NormalSpi when master_idx != 0: Shared-bus topology.
+        //   When a secondary master shares the flash bus, calibration on CS1 may need
+        //   to be skipped to avoid interfering with the primary master's calibration.
+        //   Phase 3+: gate calibration logic on config.topology.master_idx().
+        //
+        // For now, all topologies use a single divider lookup; no HCLK sweep.
+        // Phase 3+: add conditional calibration logic per topology and master_idx.
+        pw_log::info!("=== configure_timing()===");
+        //TODO: need to get this from scu register
+        let sysclk_mhz = 200u32;
+        let encoded_div = spi_freq_div(sysclk_mhz, spi_clock_mhz)?;
+
+        let cs_idx = cs as usize;
+        let reg = self.regs.read_cs_ctrl(cs);
+        self.regs.write_cs_ctrl(cs, (reg & !SPI_CTRL_FREQ_MASK) | encoded_div);
+        self.normal_read_ctrl[cs_idx] &= (!SPI_CTRL_FREQ_MASK) | encoded_div;     
+
+        Ok(())
+    }
+
+    fn timing_calibration(&mut self,  cs: ChipSelect) -> Result<(), SmcError>{
+        let cs_cfg = self.cs_config(cs)?;
+        let cs_idx = cs as usize;
+
+        if self.regs.already_calibrated(cs) {
+            pw_log::info!("already calibrated");
+            return self.configure_timing(cs, cs_cfg.spi_clock_mhz);
+        }
+        
+        //SPI2 work around
+        if self.config.topology.master_idx() != 0 && cs_idx != 0 {
+		    return self.configure_timing(cs, cs_cfg.spi_clock_mhz);
+        }
+        // TODO: add SPIM config
+
+        /*
+	     * use the related low frequency to get check calibration data
+	     * and get golden data.
+	     */
+	    let ctrl_val =  self.regs.read_cs_ctrl(cs) & (!SPI_CTRL_FREQ_MASK);
+	    self.regs.write_cs_ctrl(cs, ctrl_val);
+
+        let mut check_buf = [0u8; SPI_CALIB_LEN];
+        let window = self.flash_window_base[cs_idx] as *const u8;
+        // TODO: configure timing_calibration_start_offset beside be???
+        let timing_offset = 0x0;
+        let flash_ptr = window.wrapping_add(timing_offset);       
+        unsafe { core::ptr::copy_nonoverlapping(
+                flash_ptr,
+                check_buf.as_mut_ptr(),
+                SPI_CALIB_LEN,
+            );
+        }
+
+        if !spi_calibration_enable(&check_buf)? {      
+            pw_log::info!("Flash data is monotonous, skip calibration.");
+            return self.configure_timing(cs, cs_cfg.spi_clock_mhz);
+        }
+
+        let gold_checksum = self.spi_dma_checksum(cs, 0, 0);
+        let calib_passed = self.run_timing_sweep(cs, gold_checksum);
+        
+        if !calib_passed {                       
+             let _ = self.configure_timing(cs, cs_cfg.spi_clock_mhz);            
+        }
+
+        Ok(())
+    }
+
+    fn spi_dma_checksum(&mut self, cs: ChipSelect, div: u32, delay: u32) -> u32 {
+        let timing_offset = 0x0;
+
+        // Request DMA access
+        self.regs.acquire_dma_arbiter();
+
+        // Set DMA flash start address
+        let cs_idx = cs as usize;
+        let flash_addr = self.flash_window_base[cs_idx] + timing_offset;
+        self.regs.write_dma_flash_addr(flash_addr as u32);
+        // Set DMA length
+        self.regs.write_dma_len(SPI_CALIB_LEN as u32);
+
+        // Configure DMA control register
+        let ctrl_val = SPI_DMA_ENABLE
+            | SPI_DMA_CALC_CKSUM
+            | SPI_DMA_CALIB_MODE
+            | (delay << 0x8)
+            | ((div & 0xf) << 16);
+        self.regs.write_dma_ctrl(ctrl_val);
+        // Wait until DMA done
+        // TODO: should we use blocking call instead?
+        self.poll_blocking_dma_completion();
+
+        // Read checksum result
+        let checksum = self.regs.read_dma_checksum();
+        // Clear DMA control and discard request
+        self.regs.disable_dma();
+        self.regs.discard_magic();
+        checksum
+    }
+
+    fn run_timing_sweep(&mut self, cs: ChipSelect, gold_checksum: u32) -> bool {
+        let hclk_masks = [7u32, 14, 6, 13];       
+        let mut calib_res = [0u8; 6 * 17];
+        let cs_cfg =  self.cs_config(cs);
+        let mut freq_to_use = cs_cfg.unwrap().spi_clock_mhz;
+        let sysclk_mhz = 200u32;
+
+        for (i, &mask) in hclk_masks.iter().enumerate() {
+            let div = u32::try_from(i).unwrap() + 2;
+            if freq_to_use < sysclk_mhz / div {
+                continue;
+            }
+
+            freq_to_use = sysclk_mhz / div;
+
+            let checksum = self.spi_dma_checksum(cs, mask, 0);
+            let pass = checksum == gold_checksum;
+            pw_log::info!(
+                "HCLK/{}, no timing compensation: {}",
+                (i + 2) as u32,
+                pass as u32
+            );
+
+            calib_res.fill(0);
+
+            for hcycle in 0..=5 {
+                pw_log::info!("Delay Enable : hcycle {}", hcycle as u32);
+                for delay_ns in 0..=0xf {
+                    let reg_val = mask | (1 << 3) | hcycle | (delay_ns << 4);
+                    let checksum = self.spi_dma_checksum(cs, mask, reg_val);
+                    let pass = checksum == gold_checksum;
+                    let index = (hcycle * 17 + delay_ns) as usize;
+                    calib_res[index] = u8::from(pass);
+                    pw_log::info!(
+                        "HCLK/{}, {} HCLK cycle, {} delay_ns : {}",
+                        (i + 2) as u32,
+                        hcycle as u32,
+                        delay_ns as u32,
+                        pass as u32
+                    );
+                }
+            }
+
+              if let core::prelude::v1::Ok(Some((hcycle, delay_ns))) = pick_best_delay(&calib_res) {
+                pw_log::info!("Final hcycle: {}, delay_ns: {}", 
+                    hcycle as u32, delay_ns as u32);
+                let final_delay = ((1 << 3) | hcycle | (delay_ns << 4)) << (i * 8);
+                self.regs.write_cs_timing_compensation(cs, final_delay);
+
+                let _ = self.configure_timing(cs, freq_to_use);
+                return true;
+            }
+             pw_log::info!("Cannot get good calibration point.");
+        }
+
+        false
+    }
+    
 }
 
 unsafe fn spi_read_data(ahb_addr: *const u32, read_arr: &mut [u8]) {

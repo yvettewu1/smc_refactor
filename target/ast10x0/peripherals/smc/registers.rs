@@ -226,6 +226,9 @@ impl SmcRegisters {
             while self.read_dma_ctrl() & SPI_DMA_GRANT == 0 {}
         }
     }
+    pub fn discard_magic(&self) {
+        self.write_dma_ctrl(SPI_DMA_DISCARD_REQ_MAGIC);
+    }
 
     /// FMC084: DMA flash side start address (`R_DMA_FLASH_ADDR`).
     ///
@@ -278,12 +281,41 @@ impl SmcRegisters {
     }
 
     /// FMC094: CS0 calibration status
-    pub fn read_cs0_calib_status(&self) -> u32 {
+    pub fn read_cs0_timing_compensation(&self) -> u32 {
         self.regs().fmc094().read().bits()
     }
 
+    /// FMC094: CS0 calibration status
+    pub fn write_cs0_timing_compensation(&self, value: u32) {
+        self.regs().fmc094().write(|w| unsafe { w.bits(value) });
+    }
+
     /// FMC098: CS1 calibration status
-    pub fn read_cs1_calib_status(&self) -> u32 {
+    pub fn read_cs1_timing_compensation(&self) -> u32 {
         self.regs().fmc098().read().bits()
+    }
+
+    /// FMC098: CS0 calibration status
+    pub fn write_cs1_timing_compensation(&self, value: u32) {
+        self.regs().fmc098().write(|w| unsafe { w.bits(value) });
+    }
+
+    pub fn write_cs_timing_compensation(&self, cs: crate::smc::types::ChipSelect, value: u32) {
+        match cs {
+            crate::smc::types::ChipSelect::Cs0 => self.write_cs0_timing_compensation(value),
+            crate::smc::types::ChipSelect::Cs1 => self.write_cs1_timing_compensation(value),
+        }
+    }
+
+    pub fn already_calibrated(&self, cs: crate::smc::types::ChipSelect) -> bool {
+        match cs {
+            crate::smc::types::ChipSelect::Cs0 => {
+                self.read_cs0_timing_compensation() != 0
+            }
+
+            crate::smc::types::ChipSelect::Cs1 => {
+                self.read_cs1_timing_compensation() != 0
+            }
+        }
     }
 }

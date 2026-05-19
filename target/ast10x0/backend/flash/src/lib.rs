@@ -387,7 +387,7 @@ impl FlashBackend for Ast10x0FlashBackend {
             && address.is_multiple_of(4)
             && out.len().is_multiple_of(4)
             && (out.as_ptr() as usize).is_multiple_of(4);
-
+        // TODO:: all the dma_read logic can just be in controller
         if !dma_eligible {
             return self.with_flash(key, |flash| flash.read(address, out));
         }
