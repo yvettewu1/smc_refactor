@@ -30,7 +30,7 @@ use {console_backend as _, entry as _};
 
 pub struct Target {}
 
-
+use core::ptr::write_volatile;
 use core::ptr::read_volatile;
 #[allow(dead_code)]
 fn dump_smc_register(addr: u32, count: u32) {
@@ -64,6 +64,7 @@ fn dump_smc_read(buf: &[u8], count: u32) {
         pw_log::info!("[0x{:08x}] = 0x{:08x}", i as u32, value as u32);
     }
 }
+
 #[allow(dead_code)]
 fn run_smc_smoke_test() -> Result<(), SmcError> {
     // --- 1. Init ---
@@ -111,18 +112,35 @@ fn run_smc_smoke_test() -> Result<(), SmcError> {
     }
     dump_smc_read(&buf, 64);
     
-    #[repr(align(4))]
-    struct AlignedBuf([u8; 256]);
 
+
+    pw_log::info!("=== program reg read dma test===");
+    unsafe { write_volatile(0x7E62_0080 as *mut u32, 0x0);
+    write_volatile(0x7E62_0084 as *mut u32, 0x0);
+    write_volatile(0x7E62_0088 as *mut u32, 0x80041000);
+    write_volatile(0x7E62_008c as *mut u32, 0x1ff);
+    }
+     dump_smc_register(0x7E62_0000, 8);
+     dump_smc_register(0x7E62_0080, 8);
+     unsafe { write_volatile(0x7E62_0080 as *mut u32, 0x01); }
+    pw_log::info!("=== start dma test===");
+    dump_smc_register(0x7E62_0080, 8);  
+    pw_log::info!("=== end dma test===");
+     unsafe { write_volatile(0x7E62_0080 as *mut u32, 0x0); }
+    let tempbuf = unsafe {
+        core::slice::from_raw_parts(0x41000 as *mut u8, 256)
+    };
+    dump_smc_read(tempbuf, 64);
+    pw_log::info!("=== END program reg read dma test===");
+    pw_log::info!("=== =======================================");
     pw_log::info!("=== read dma test===");
-    let mut dma_buf = AlignedBuf([0x5A; 256]);
     // --- 4. DMA  ---
-    let _ = match controller.dma_read(ChipSelect::Cs0, 0x500, dma_buf.0.as_mut_ptr() as usize, 256) {
+    let _ = match controller.dma_read(ChipSelect::Cs0, 0x600, 0x41400 as usize, 256) {
         Err(SmcError::InvalidCapacity) => Ok(()),
         Err(other) => Err(other),
         Ok(()) => Err(SmcError::HardwareError),
     };
-    dump_smc_register(0x7E62_0080, 16);
+    //dump_smc_register(0x7E62_0080, 8);
      loop {
             match controller.poll_dma_completion() {
                 core::task::Poll::Pending => {
@@ -138,8 +156,12 @@ fn run_smc_smoke_test() -> Result<(), SmcError> {
         }
 
     pw_log::info!("=== dma done= ==");
-    dump_smc_register(0x7E62_0080, 16);
-    dump_smc_read(&dma_buf.0, 256);
+    dump_smc_register(0x7E62_0000, 8);
+    dump_smc_register(0x7E62_0080, 8);
+    let tempbuf1 = unsafe {
+        core::slice::from_raw_parts(0x41400 as *mut u8, 256)
+    };
+    dump_smc_read(tempbuf1, 256);
 
     Ok(())
     /*

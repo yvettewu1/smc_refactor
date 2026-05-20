@@ -213,7 +213,12 @@ impl Smc<Ready> {
 
         Ok(buf.len())
     }
-
+    #[inline(never)]
+    pub fn loop_delay(spin_cnt: u32) {
+        for _ in 0..spin_cnt {
+            core::hint::spin_loop();
+        }
+    }
     /// Initiate a DMA read operation (non-blocking).
     pub fn dma_read(&mut self, cs: ChipSelect, flash_offset: u32, dram_addr: usize, len: u32) -> Result<(), SmcError> {
         if self.state != SmcState::Idle {
@@ -225,6 +230,8 @@ impl Smc<Ready> {
         if cs == ChipSelect::Cs1 && self.config.cs1.is_none() {
             return Err(SmcError::InvalidChipSelect);
         }
+        self.regs.disable_dma();
+        Self::loop_delay(0x1000);
         pw_log::info!("dma_read()");
         let cs_config = self.cs_config(cs)?;
         let cs_capacity = flash_capacity_bytes(Some(cs_config))?;
@@ -245,7 +252,7 @@ impl Smc<Ready> {
         validated.flash_start as u32,
         cs_capacity as u32,
         validated.dram_addr as u32,
-        len as u32);
+        validated.dma_len_reg as u32);
 
         // Set CS0 control register to normal-read mode before programming DMA
         // registers. The DMA engine reads the CSx control register to know which
@@ -284,11 +291,11 @@ impl Smc<Ready> {
         if self.config.enable_interrupts {
             self.regs.enable_dma_irq();
         }
-
+        Self::loop_delay(0x1000);
         // Kick DMA via read-modify-write to preserve timing calibration
         // bits (fmc080 bits 8-19), matching aspeed-rust fmccontroller.rs::read_dma.
         self.regs.kick_dma_read();
-
+        Self::loop_delay(0x1000);
         self.state = SmcState::DmaInFlight;
         Ok(())
     }
@@ -314,13 +321,13 @@ impl Smc<Ready> {
         let dma_in_flight = self.state == SmcState::DmaInFlight;
         let decoded = SmcInterruptDecoder::decode_with_context(status, dma_in_flight);
         self.clear_dma_status(relevant);
-        pw_log::info!("complete dma status 0x{:08x}", status as u32);
-        pw_log::info!("after clear...read_dma_statusfmc08 :0x{:08x}",self.dma_status() as u32);
-        pw_log::info!("complete dma");
+        //pw_log::info!("complete dma status 0x{:08x}", status as u32);
+        //pw_log::info!("after clear...read_dma_statusfmc08 :0x{:08x}",self.dma_status() as u32);
+        //pw_log::info!("complete dma");
         match decoded {
             SmcInterrupt::DmaComplete => {
                 self.regs.disable_dma();
-                pw_log::info!("after disable...read_dma_statusfmc08 :0x{:08x}",self.dma_status() as u32);
+               // pw_log::info!("after disable...read_dma_statusfmc08 :0x{:08x}",self.dma_status() as u32);
                 self.state = SmcState::Idle;
                 Ok(decoded)
             }
@@ -580,7 +587,7 @@ impl Smc<Ready> {
         }
 
         let gold_checksum = self.spi_dma_checksum(cs, 0, 0);
-         pw_log::info!("gold_checksum: 0x{:08x}", gold_checksum as u32);
+         //pw_log::info!("gold_checksum: 0x{:08x}", gold_checksum as u32);
         let calib_passed = self.run_timing_sweep(cs, gold_checksum);
         
         if !calib_passed {                       
@@ -610,7 +617,7 @@ impl Smc<Ready> {
             | (delay << 0x8)
             | ((div & 0xf) << 16);
         self.regs.write_dma_ctrl(ctrl_val);
-        pw_log::info!("checksum ctrl_val 0x{:08x}", ctrl_val as u32);
+        //pw_log::info!("checksum ctrl_val 0x{:08x}", ctrl_val as u32);
 
         // Wait until DMA done
         // TODO: should we use blocking call instead?
@@ -622,7 +629,7 @@ impl Smc<Ready> {
         let checksum = self.regs.read_dma_checksum();
         // Clear DMA control and discard request
         self.regs.disable_dma();
-         pw_log::info!("checksum done!");
+         //pw_log::info!("checksum done!");
         return checksum;
     }
 
@@ -632,7 +639,7 @@ impl Smc<Ready> {
         let cs_cfg =  self.cs_config(cs);
         let mut freq_to_use = cs_cfg.unwrap().spi_clock_mhz;
         let sysclk_mhz = 200u32;
-         pw_log::info!("run_timing_sweep");
+         //pw_log::info!("run_timing_sweep");
         for (i, &mask) in hclk_masks.iter().enumerate() {
             let div = u32::try_from(i).unwrap() + 2;
             if freq_to_use < sysclk_mhz / div {
@@ -640,24 +647,25 @@ impl Smc<Ready> {
             }
 
             freq_to_use = sysclk_mhz / div;
-            pw_log::info!("freq_to_use 0x{:08x}", freq_to_use as u32);
+            //pw_log::info!("freq_to_use 0x{:08x}", freq_to_use as u32);
             let checksum = self.spi_dma_checksum(cs, mask, 0);
             let pass = checksum == gold_checksum;
+            
             pw_log::info!(
                 "HCLK/{}, no timing compensation: {}",
                 (i + 2) as u32,
                 pass as u32
             );
-
+            
             calib_res.fill(0);
 
             for hcycle in 0..=5 {
-                pw_log::info!("Delay Enable : hcycle {}", hcycle as u32);
+                //pw_log::info!("Delay Enable : hcycle {}", hcycle as u32);
                 for delay_ns in 0..=0xf {
                     let reg_val = (1 << 3) | hcycle | (delay_ns << 4);
                     //pw_log::info!("start dma");
                     let checksum = self.spi_dma_checksum(cs, mask, reg_val);
-                    pw_log::info!("done dma");
+                    //pw_log::info!("done dma");
                     let pass = checksum == gold_checksum;
                     let index = (hcycle * 17 + delay_ns) as usize;
                     calib_res[index] = u8::from(pass);
