@@ -8,7 +8,7 @@ use core::marker::PhantomData;
 use crate::smc::helpers::{
     SPI_CTRL_FREQ_MASK, SPI_DMA_RAM_MAP_BASE, encode_segment, flash_capacity_bytes, spi_freq_div,
     total_capacity_bytes, validate_dma_read, validate_mapped_range,
-    spi_calibration_enable, SPI_DMA_ENABLE, SPI_DMA_CALC_CKSUM, SPI_DMA_CALIB_MODE, pick_best_delay
+    spi_calibration_enable, SPI_DMA_ENABLE, SPI_DMA_CALC_CKSUM, SPI_DMA_CALIB_MODE, get_mid_point_of_longest_one
 };
 use crate::smc::interrupts::{SmcInterrupt, SmcInterruptDecoder};
 use crate::smc::registers::SmcRegisters;
@@ -383,10 +383,18 @@ impl Smc<Ready> {
         core::task::Poll::Ready(self.complete_dma(status).map(|_| ()))
     }
 
-   pub fn poll_blocking_dma_completion(&self) {
-        while self.regs.read_dma_status() & DMA_STATUS_RELEVANT_BITS == 0 {}
-   }
+   pub fn poll_blocking_dma_completion(&self, timeout: u32) -> u32{
+       let mut to = timeout;
 
+       while (self.regs.read_dma_status() & DMA_STATUS_RELEVANT_BITS) == 0 {                
+           to -= 1;
+
+           if to == 0 {
+               return 0;
+           }
+       }
+       return to;
+   }
     /// Check if controller is ready for operations.
     pub fn is_ready(&self) -> bool {
         self.state == SmcState::Idle
@@ -547,7 +555,6 @@ impl Smc<Ready> {
 		    return self.configure_timing(cs, cs_cfg.spi_clock_mhz);
         }
         // TODO: add SPIM config
-
         /*
 	     * use the related low frequency to get check calibration data
 	     * and get golden data.
@@ -573,10 +580,11 @@ impl Smc<Ready> {
         }
 
         let gold_checksum = self.spi_dma_checksum(cs, 0, 0);
+         pw_log::info!("gold_checksum: 0x{:08x}", gold_checksum as u32);
         let calib_passed = self.run_timing_sweep(cs, gold_checksum);
         
         if !calib_passed {                       
-             let _ = self.configure_timing(cs, cs_cfg.spi_clock_mhz);            
+             let _ = self.configure_timing(cs, cs_cfg.spi_clock_mhz);              
         }
 
         Ok(())
@@ -602,16 +610,20 @@ impl Smc<Ready> {
             | (delay << 0x8)
             | ((div & 0xf) << 16);
         self.regs.write_dma_ctrl(ctrl_val);
+        pw_log::info!("checksum ctrl_val 0x{:08x}", ctrl_val as u32);
+
         // Wait until DMA done
         // TODO: should we use blocking call instead?
-        self.poll_blocking_dma_completion();
+        if self.poll_blocking_dma_completion(0x8000) == 0 {
+            pw_log::info!("dma timeout!");
+        }
 
         // Read checksum result
         let checksum = self.regs.read_dma_checksum();
         // Clear DMA control and discard request
         self.regs.disable_dma();
-        self.regs.discard_magic();
-        checksum
+         pw_log::info!("checksum done!");
+        return checksum;
     }
 
     fn run_timing_sweep(&mut self, cs: ChipSelect, gold_checksum: u32) -> bool {
@@ -620,7 +632,7 @@ impl Smc<Ready> {
         let cs_cfg =  self.cs_config(cs);
         let mut freq_to_use = cs_cfg.unwrap().spi_clock_mhz;
         let sysclk_mhz = 200u32;
-
+         pw_log::info!("run_timing_sweep");
         for (i, &mask) in hclk_masks.iter().enumerate() {
             let div = u32::try_from(i).unwrap() + 2;
             if freq_to_use < sysclk_mhz / div {
@@ -628,7 +640,7 @@ impl Smc<Ready> {
             }
 
             freq_to_use = sysclk_mhz / div;
-
+            pw_log::info!("freq_to_use 0x{:08x}", freq_to_use as u32);
             let checksum = self.spi_dma_checksum(cs, mask, 0);
             let pass = checksum == gold_checksum;
             pw_log::info!(
@@ -642,35 +654,42 @@ impl Smc<Ready> {
             for hcycle in 0..=5 {
                 pw_log::info!("Delay Enable : hcycle {}", hcycle as u32);
                 for delay_ns in 0..=0xf {
-                    let reg_val = mask | (1 << 3) | hcycle | (delay_ns << 4);
+                    let reg_val = (1 << 3) | hcycle | (delay_ns << 4);
+                    //pw_log::info!("start dma");
                     let checksum = self.spi_dma_checksum(cs, mask, reg_val);
+                    pw_log::info!("done dma");
                     let pass = checksum == gold_checksum;
                     let index = (hcycle * 17 + delay_ns) as usize;
                     calib_res[index] = u8::from(pass);
-                    pw_log::info!(
+                   /* pw_log::info!(
                         "HCLK/{}, {} HCLK cycle, {} delay_ns : {}",
                         (i + 2) as u32,
                         hcycle as u32,
                         delay_ns as u32,
                         pass as u32
-                    );
+                    ); */
                 }
-            }
+            }//hcycle
 
-              if let core::prelude::v1::Ok(Some((hcycle, delay_ns))) = pick_best_delay(&calib_res) {
-                pw_log::info!("Final hcycle: {}, delay_ns: {}", 
-                    hcycle as u32, delay_ns as u32);
+            let calib_point = get_mid_point_of_longest_one(&calib_res);
+            if calib_point >= 0 { 
+                let hcycle = (calib_point as u32 / 17) as u32;
+                let delay_ns = (calib_point as u32 % 17) as u32;
                 let final_delay = ((1 << 3) | hcycle | (delay_ns << 4)) << (i * 8);
+             
+                pw_log::info!("Final hcycle: {}, delay_ns: {} final_delay0x{:08x}", 
+                        hcycle as u32, delay_ns as u32, final_delay as u32);
+                
                 self.regs.write_cs_timing_compensation(cs, final_delay);
 
                 let _ = self.configure_timing(cs, freq_to_use);
-                return true;
+                return true;                
+            } else {
+                pw_log::info!("Cannot get good calibration point.");
             }
-             pw_log::info!("Cannot get good calibration point.");
         }
-
         false
-    }
+    }// run_timing_sweep
     
 }
 

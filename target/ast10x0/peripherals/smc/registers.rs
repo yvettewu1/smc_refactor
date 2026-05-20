@@ -226,9 +226,6 @@ impl SmcRegisters {
             while self.read_dma_ctrl() & SPI_DMA_GRANT == 0 {}
         }
     }
-    pub fn discard_magic(&self) {
-        self.write_dma_ctrl(SPI_DMA_DISCARD_REQ_MAGIC);
-    }
 
     /// FMC084: DMA flash side start address (`R_DMA_FLASH_ADDR`).
     ///

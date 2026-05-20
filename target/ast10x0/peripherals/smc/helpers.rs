@@ -212,7 +212,7 @@ pub(crate) fn spi_freq_div(sysclk_mhz: u32, max_freq_mhz: u32) -> Result<u32, Sm
 ///
 /// # Arguments
 /// * `buf` - slice of bytes (each should be 0 or 1).
-pub(crate) fn get_mid_point_of_longest_one(buf: &[u8]) -> Result<i32, SmcError> {
+pub(crate) fn get_mid_point_of_longest_one(buf: &[u8]) -> i32{
     let mut start = 0;
     let mut mid_point = 0;
     let mut max_cnt = 0;
@@ -233,24 +233,9 @@ pub(crate) fn get_mid_point_of_longest_one(buf: &[u8]) -> Result<i32, SmcError> 
     }
 
     if max_cnt < 4 {
-        Ok(-1)
+        return -1;
     } else {
-        Ok(i32::try_from(mid_point).unwrap())
-    }
-}
-
-pub(crate) fn pick_best_delay(
-    calib_res: &[u8],
-) -> Result<Option<(u32, u32)>, SmcError> {
-    let calib_point = get_mid_point_of_longest_one(calib_res)?;
-
-    if calib_point < 0 {
-        Ok(None)
-    } else {
-        let hcycle = (calib_point / 17) as u32;
-        let delay_ns = (calib_point % 17) as u32;
-
-        Ok(Some((hcycle, delay_ns)))
+        return i32::try_from(mid_point).unwrap();
     }
 }
 
