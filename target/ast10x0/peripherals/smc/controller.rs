@@ -105,7 +105,7 @@ impl Smc<Uninitialized> {
         //
         // Topology gates behavior in setup_segments() and configure_timing():
         // The topology is consulted via self.config.topology.
-        pw_log::info!("=== init()===");
+
         // 1. Configure flash types and write-enable per CS
         let mut conf = 0u32;
         if self.config.cs0.is_some() {
@@ -119,8 +119,6 @@ impl Smc<Uninitialized> {
         }
         self.regs.write_config(conf);
 
-
-
         // 2. Set up segment addresses (memory mapping)
         Self::setup_segments(&self)?;
 
@@ -128,17 +126,12 @@ impl Smc<Uninitialized> {
         // CS1 value is captured even if cs1 is None (safe: register read is harmless).
         let cs0_normal_read = self.regs.read_cs0_ctrl();
         let cs1_normal_read = self.regs.read_cs1_ctrl();
-         pw_log::info!("cs0_normal_read: 0x{:08x} cs1_normal_read:0x{:08x}",
-            cs0_normal_read as u32,
-            cs1_normal_read as u32);
 
         // Compute per-CS AHB flash window base addresses.
         let base = self.controller_id.flash_window_address();
         let cs0_size = flash_capacity_bytes(self.config.cs0).unwrap_or(0);
         let flash_window_base = [base, base + cs0_size];
-        pw_log::info!("flash_window_address: 0x{:08x} flash_capacity_bytes:0x{:08x}",
-            flash_window_base[0] as u32,
-            cs0_size as u32);
+
         Ok(Smc {
             regs: self.regs,
             controller_id: self.controller_id,
@@ -166,9 +159,6 @@ impl Smc<Uninitialized> {
         let cs0_size = flash_capacity_bytes(self.config.cs0)?;
         let cs1_size = flash_capacity_bytes(self.config.cs1)?;
         total_capacity_bytes(self.config.cs0, self.config.cs1)?;
-        pw_log::info!("=== setup_segments() cs0 size: 0x{:08x} cs1_size:0x{:08x}===",
-            cs0_size as u32,
-            cs1_size as u32);
 
         if cs0_size > 0 {
             let seg = encode_segment(0, cs0_size)?;
@@ -197,7 +187,7 @@ impl Smc<Ready> {
         let window = self.flash_window_base[cs_idx] as *const u8;
         let offset = validate_mapped_range(offset, buf.len(), cs_capacity)?;
         let flash_ptr = window.wrapping_add(offset);
-        pw_log::info!("read: offset0x{:08x}, size:0x{:08x}, flash ptr:0x{:08x}",
+        pw_log::debug!("read: offset0x{:08x}, size:0x{:08x}, flash ptr:0x{:08x}",
             offset as u32,
             buf.len() as u32,
             flash_ptr as u32);
@@ -232,10 +222,10 @@ impl Smc<Ready> {
         }
         self.regs.disable_dma();
         Self::loop_delay(0x1000);
-        pw_log::info!("dma_read()");
+
         let cs_config = self.cs_config(cs)?;
         let cs_capacity = flash_capacity_bytes(Some(cs_config))?;
-        pw_log::info!("flash_offset: 0x{:08x}, cs_cap: 0x{:08x}", 
+        pw_log::debug!("flash_offset: 0x{:08x}, cs_cap: 0x{:08x}", 
         flash_offset as u32,
         cs_capacity as u32
         );
@@ -248,7 +238,7 @@ impl Smc<Ready> {
             dram_addr,
             len    
         )?;
-        pw_log::info!("flash start: 0x{:08x}, cs_cap: 0x{:08x}, dram_addr: 0x{:08x} len: 0x{:08x} ", 
+        pw_log::debug!("flash start: 0x{:08x}, cs_cap: 0x{:08x}, dram_addr: 0x{:08x} len: 0x{:08x} ", 
         validated.flash_start as u32,
         cs_capacity as u32,
         validated.dram_addr as u32,
@@ -262,15 +252,14 @@ impl Smc<Ready> {
         let cs_idx = cs as usize;
         let ctrl_val = self.normal_read_ctrl[cs_idx] | ASPEED_SPI_NORMAL_READ;
         self.regs.write_cs_ctrl(cs, ctrl_val);
-        pw_log::info!("cs ctrl value:0x{:08x}",  self.regs.read_cs_ctrl(cs) as u32);
-        
+
         // Acquire the DMA bus arbiter before programming any DMA registers.
         // On SPI1/SPI2: writes SPI_DMA_GET_REQ_MAGIC and spins until DMAGrant
         // (bit 30 of spi080) is set. On FMC: bits 20–31 are Reserved — the write
         // is a no-op and the spin condition is immediately false. Safe to call
         // unconditionally on all controllers, matching aspeed-rust's approach.
         self.regs.acquire_dma_arbiter();
-         pw_log::info!("done acquire_dma_arbiter()");
+   
         // Program DMA registers in the order used by aspeed-rust fmccontroller.rs::read_dma:
         //   fmc084 = flash side DMA address (R_DMA_FLASH_ADDR)
         //            = flash_window_base[cs] - SPI_DMA_FLASH_MAP_BASE + cs_offset
@@ -321,13 +310,10 @@ impl Smc<Ready> {
         let dma_in_flight = self.state == SmcState::DmaInFlight;
         let decoded = SmcInterruptDecoder::decode_with_context(status, dma_in_flight);
         self.clear_dma_status(relevant);
-        //pw_log::info!("complete dma status 0x{:08x}", status as u32);
-        //pw_log::info!("after clear...read_dma_statusfmc08 :0x{:08x}",self.dma_status() as u32);
-        //pw_log::info!("complete dma");
+
         match decoded {
             SmcInterrupt::DmaComplete => {
-                self.regs.disable_dma();
-               // pw_log::info!("after disable...read_dma_statusfmc08 :0x{:08x}",self.dma_status() as u32);
+                self.regs.disable_dma();               
                 self.state = SmcState::Idle;
                 Ok(decoded)
             }
@@ -505,7 +491,7 @@ impl Smc<Ready> {
         let mode: TransferMode = TransferMode::Mode114;
         let dummy: u32 = 0x1;
         let cs_idx = cs as usize;
-        pw_log::info!("=== spi_read_init()===");
+        //pw_log::info!("=== spi_read_init()===");
         //TODO: SPI_NOR_CMD_QREAD (1-1-4) - 3byte
         let read_cmd = mode.data_io_bits()
             | (0x6b << 16)
@@ -535,7 +521,7 @@ impl Smc<Ready> {
         //
         // For now, all topologies use a single divider lookup; no HCLK sweep.
         // Phase 3+: add conditional calibration logic per topology and master_idx.
-        pw_log::info!("=== configure_timing()===");
+       // pw_log::info!("=== configure_timing()===");
         //TODO: need to get this from scu register
         let sysclk_mhz = 200u32;
         let encoded_div = spi_freq_div(sysclk_mhz, spi_clock_mhz)?;
@@ -582,12 +568,10 @@ impl Smc<Ready> {
         }
 
         if !spi_calibration_enable(&check_buf)? {      
-            pw_log::info!("Flash data is monotonous, skip calibration.");
             return self.configure_timing(cs, cs_cfg.spi_clock_mhz);
         }
 
         let gold_checksum = self.spi_dma_checksum(cs, 0, 0);
-         //pw_log::info!("gold_checksum: 0x{:08x}", gold_checksum as u32);
         let calib_passed = self.run_timing_sweep(cs, gold_checksum);
         
         if !calib_passed {                       
@@ -617,7 +601,6 @@ impl Smc<Ready> {
             | (delay << 0x8)
             | ((div & 0xf) << 16);
         self.regs.write_dma_ctrl(ctrl_val);
-        //pw_log::info!("checksum ctrl_val 0x{:08x}", ctrl_val as u32);
 
         // Wait until DMA done
         // TODO: should we use blocking call instead?
@@ -629,7 +612,7 @@ impl Smc<Ready> {
         let checksum = self.regs.read_dma_checksum();
         // Clear DMA control and discard request
         self.regs.disable_dma();
-         //pw_log::info!("checksum done!");
+
         return checksum;
     }
 
@@ -639,7 +622,7 @@ impl Smc<Ready> {
         let cs_cfg =  self.cs_config(cs);
         let mut freq_to_use = cs_cfg.unwrap().spi_clock_mhz;
         let sysclk_mhz = 200u32;
-         //pw_log::info!("run_timing_sweep");
+
         for (i, &mask) in hclk_masks.iter().enumerate() {
             let div = u32::try_from(i).unwrap() + 2;
             if freq_to_use < sysclk_mhz / div {
@@ -647,35 +630,21 @@ impl Smc<Ready> {
             }
 
             freq_to_use = sysclk_mhz / div;
-            //pw_log::info!("freq_to_use 0x{:08x}", freq_to_use as u32);
-            let checksum = self.spi_dma_checksum(cs, mask, 0);
-            let pass = checksum == gold_checksum;
-            
-            pw_log::info!(
-                "HCLK/{}, no timing compensation: {}",
-                (i + 2) as u32,
-                pass as u32
-            );
-            
+
+            self.spi_dma_checksum(cs, mask, 0);
+
             calib_res.fill(0);
 
             for hcycle in 0..=5 {
-                //pw_log::info!("Delay Enable : hcycle {}", hcycle as u32);
+
                 for delay_ns in 0..=0xf {
                     let reg_val = (1 << 3) | hcycle | (delay_ns << 4);
-                    //pw_log::info!("start dma");
+
                     let checksum = self.spi_dma_checksum(cs, mask, reg_val);
-                    //pw_log::info!("done dma");
+
                     let pass = checksum == gold_checksum;
                     let index = (hcycle * 17 + delay_ns) as usize;
                     calib_res[index] = u8::from(pass);
-                   /* pw_log::info!(
-                        "HCLK/{}, {} HCLK cycle, {} delay_ns : {}",
-                        (i + 2) as u32,
-                        hcycle as u32,
-                        delay_ns as u32,
-                        pass as u32
-                    ); */
                 }
             }//hcycle
 

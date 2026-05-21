@@ -30,7 +30,6 @@ use {console_backend as _, entry as _};
 
 pub struct Target {}
 
-use core::ptr::write_volatile;
 use core::ptr::read_volatile;
 #[allow(dead_code)]
 fn dump_smc_register(addr: u32, count: u32) {
@@ -91,6 +90,12 @@ fn run_smc_smoke_test() -> Result<(), SmcError> {
     pw_log::info!("=== AST10x0 smc  smoke test  ===");
     let controller = unsafe { UninitSmc::new(config)? };
     let mut controller = controller.init()?;
+    /*
+    let _ = match controller.spi_nor_read_init(ChipSelect::Cs0){
+        Ok(v) => v,
+        Err(e) => { pw_log::info!("Error:: spi_nor_read_init");return Err(e);},
+    }; */
+
     controller.spi_nor_read_init(ChipSelect::Cs0);
 
     pw_log::info!("=== Dump 0x7E62_0000 ===");
@@ -112,56 +117,27 @@ fn run_smc_smoke_test() -> Result<(), SmcError> {
     }
     dump_smc_read(&buf, 64);
     
-
-
-    pw_log::info!("=== program reg read dma test===");
-    unsafe { write_volatile(0x7E62_0080 as *mut u32, 0x0);
-    write_volatile(0x7E62_0084 as *mut u32, 0x0);
-    write_volatile(0x7E62_0088 as *mut u32, 0x80041000);
-    write_volatile(0x7E62_008c as *mut u32, 0x1ff);
-    }
-     dump_smc_register(0x7E62_0000, 8);
-     dump_smc_register(0x7E62_0080, 8);
-     unsafe { write_volatile(0x7E62_0080 as *mut u32, 0x01); }
-    pw_log::info!("=== start dma test===");
-    dump_smc_register(0x7E62_0080, 8);  
-    pw_log::info!("=== end dma test===");
-     unsafe { write_volatile(0x7E62_0080 as *mut u32, 0x0); }
-    let tempbuf = unsafe {
-        core::slice::from_raw_parts(0x41000 as *mut u8, 256)
-    };
-    dump_smc_read(tempbuf, 64);
-    pw_log::info!("=== END program reg read dma test===");
-    pw_log::info!("=== =======================================");
     pw_log::info!("=== read dma test===");
     // --- 4. DMA  ---
-    let _ = match controller.dma_read(ChipSelect::Cs0, 0x600, 0x41400 as usize, 256) {
+        let tempbuf = unsafe {
+        core::slice::from_raw_parts(0x41000 as *mut u8, 256)
+    };
+    
+    let _ = match controller.dma_read(ChipSelect::Cs0, 0x600, 0x41000 as usize, 256) {
         Err(SmcError::InvalidCapacity) => Ok(()),
         Err(other) => Err(other),
         Ok(()) => Err(SmcError::HardwareError),
-    };
-    //dump_smc_register(0x7E62_0080, 8);
-     loop {
-            match controller.poll_dma_completion() {
-                core::task::Poll::Pending => {
-                    // still running
-                }
+    }; 
 
-                core::task::Poll::Ready(result) => {
-                    result?;
-                     pw_log::info!("dma completion is ready");
-                    break;
-                }
-            }
-        }
+    //dump_smc_register(0x7E62_0080, 8);
+    if controller.poll_blocking_dma_completion(0x1000) == 0 {
+        pw_log::info!("dma timeout!");
+    }
 
     pw_log::info!("=== dma done= ==");
     dump_smc_register(0x7E62_0000, 8);
     dump_smc_register(0x7E62_0080, 8);
-    let tempbuf1 = unsafe {
-        core::slice::from_raw_parts(0x41400 as *mut u8, 256)
-    };
-    dump_smc_read(tempbuf1, 256);
+    dump_smc_read(tempbuf, 256);
 
     Ok(())
     /*
