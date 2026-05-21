@@ -487,7 +487,7 @@ impl Smc<Ready> {
     // MMIO access:: nor read init 
     //
     //TODO: call from nordevice layer instead 
-   pub fn spi_nor_read_init(&mut self, cs: ChipSelect) {
+   pub fn spi_nor_read_init(&mut self, cs: ChipSelect) -> Result<(), SmcError> {
         let mode: TransferMode = TransferMode::Mode114;
         let dummy: u32 = 0x1;
         let cs_idx = cs as usize;
@@ -505,7 +505,7 @@ impl Smc<Ready> {
         self.regs.write_addr_width(0x2a00);     
         // TODO: update normal_read_ctrl
         self.normal_read_ctrl[cs_idx] = read_cmd;
-         let _ = self.timing_calibration(cs);
+        self.timing_calibration(cs)
     }
     
     fn configure_timing(&mut self, cs: ChipSelect, spi_clock_mhz: u32) -> Result<(), SmcError> {
@@ -572,13 +572,9 @@ impl Smc<Ready> {
         }
 
         let gold_checksum = self.spi_dma_checksum(cs, 0, 0);
-        let calib_passed = self.run_timing_sweep(cs, gold_checksum);
-        
-        if !calib_passed {                       
-             let _ = self.configure_timing(cs, cs_cfg.spi_clock_mhz);              
-        }
-
-        Ok(())
+        self.run_timing_sweep(cs, gold_checksum);   
+                              
+        self.configure_timing(cs, cs_cfg.spi_clock_mhz)
     }
 
     fn spi_dma_checksum(&mut self, cs: ChipSelect, div: u32, delay: u32) -> u32 {
@@ -603,12 +599,12 @@ impl Smc<Ready> {
         self.regs.write_dma_ctrl(ctrl_val);
 
         // Wait until DMA done
-        // TODO: should we use blocking call instead?
-        if self.poll_blocking_dma_completion(0x8000) == 0 {
+        if self.poll_blocking_dma_completion(0x1000) == 0 {
             pw_log::info!("dma timeout!");
         }
 
         // Read checksum result
+        // disable dma will clear the checksum
         let checksum = self.regs.read_dma_checksum();
         // Clear DMA control and discard request
         self.regs.disable_dma();
@@ -616,7 +612,7 @@ impl Smc<Ready> {
         return checksum;
     }
 
-    fn run_timing_sweep(&mut self, cs: ChipSelect, gold_checksum: u32) -> bool {
+    fn run_timing_sweep(&mut self, cs: ChipSelect, gold_checksum: u32) {
         let hclk_masks = [7u32, 14, 6, 13];       
         let mut calib_res = [0u8; 6 * 17];
         let cs_cfg =  self.cs_config(cs);
@@ -658,16 +654,13 @@ impl Smc<Ready> {
                         hcycle as u32, delay_ns as u32, final_delay as u32);
                 
                 self.regs.write_cs_timing_compensation(cs, final_delay);
-
-                let _ = self.configure_timing(cs, freq_to_use);
-                return true;                
+                return;                
             } else {
                 pw_log::info!("Cannot get good calibration point.");
             }
         }
-        false
-    }// run_timing_sweep
-    
+    }// run_timing_sweep    
+
 }
 
 unsafe fn spi_read_data(ahb_addr: *const u32, read_arr: &mut [u8]) {

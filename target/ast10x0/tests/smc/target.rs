@@ -90,17 +90,15 @@ fn run_smc_smoke_test() -> Result<(), SmcError> {
     pw_log::info!("=== AST10x0 smc  smoke test  ===");
     let controller = unsafe { UninitSmc::new(config)? };
     let mut controller = controller.init()?;
-    /*
+    
     let _ = match controller.spi_nor_read_init(ChipSelect::Cs0){
         Ok(v) => v,
         Err(e) => { pw_log::info!("Error:: spi_nor_read_init");return Err(e);},
-    }; */
-
-    controller.spi_nor_read_init(ChipSelect::Cs0);
+    }; 
 
     pw_log::info!("=== Dump 0x7E62_0000 ===");
     dump_smc_register(0x7E62_0000, 16);
-     dump_smc_register(0x8000_0000, 16);
+    dump_smc_register(0x8000_0000, 16);
     if !controller.is_ready() || controller.controller_id() != SmcController::Fmc {
         return Err(SmcError::HardwareError);
     }
@@ -119,19 +117,27 @@ fn run_smc_smoke_test() -> Result<(), SmcError> {
     
     pw_log::info!("=== read dma test===");
     // --- 4. DMA  ---
-        let tempbuf = unsafe {
+    let tempbuf = unsafe {
         core::slice::from_raw_parts(0x41000 as *mut u8, 256)
     };
     
-    let _ = match controller.dma_read(ChipSelect::Cs0, 0x600, 0x41000 as usize, 256) {
+    let _ = match controller.dma_read(ChipSelect::Cs0, 0x500, 0x41000 as usize, 256) {
         Err(SmcError::InvalidCapacity) => Ok(()),
         Err(other) => Err(other),
         Ok(()) => Err(SmcError::HardwareError),
     }; 
 
-    //dump_smc_register(0x7E62_0080, 8);
-    if controller.poll_blocking_dma_completion(0x1000) == 0 {
-        pw_log::info!("dma timeout!");
+    loop {
+        match controller.poll_dma_completion() {
+            core::task::Poll::Pending => {
+                // still running
+            }
+            core::task::Poll::Ready(result) => {
+                result?;
+                    pw_log::info!("dma completion is ready");
+                break;
+            }
+        }
     }
 
     pw_log::info!("=== dma done= ==");
@@ -139,10 +145,8 @@ fn run_smc_smoke_test() -> Result<(), SmcError> {
     dump_smc_register(0x7E62_0080, 8);
     dump_smc_read(tempbuf, 256);
 
-    Ok(())
-    /*
     pw_log::info!("=== read overflow test===");
-    // --- 3. PIO read — bounds rejection ---
+    // --- 3. MMIO read — bounds rejection ---
     // 1 MB capacity = 0x10_0000 bytes.  Offset 0xFFFFF with len 8 crosses the
     // boundary; validate_mapped_range must reject it before any MMIO access.
     let mut overflow_buf = [0u8; 8];
@@ -150,10 +154,9 @@ fn run_smc_smoke_test() -> Result<(), SmcError> {
         Err(SmcError::InvalidCapacity) => {}
         Err(other) => return Err(other),
         Ok(_) => return Err(SmcError::HardwareError),
-    }
-   
-    */
-    
+    } 
+
+    Ok(())
 }
 
 
