@@ -9,14 +9,14 @@
 //! This layer ensures no duplication: mux control delegates to SCU routing, and SPIPF
 //! operations delegate to SPI monitor registers.
 
-use ast10x0_peripherals::spimonitor::traits::Monitor;
-use ast10x0_peripherals::spimonitor::types::{
-    BootError, BootResult, MuxSelect, MonitorInstance, MonitorStatus,
-    PrivilegeDirection, PrivilegeOp,
-};
-use ast10x0_peripherals::spimonitor::registers::SpiMonitorRegisters;
 use ast10x0_peripherals::scu::registers::ScuRegisters;
 use ast10x0_peripherals::scu::types::{ScuExtMuxSelect, SpiMonitorInstance};
+use ast10x0_peripherals::spimonitor::registers::SpiMonitorRegisters;
+use ast10x0_peripherals::spimonitor::traits::Monitor;
+use ast10x0_peripherals::spimonitor::types::{
+    BootError, BootResult, MonitorInstance, MonitorStatus, MuxSelect, PrivilegeDirection,
+    PrivilegeOp,
+};
 
 /// Board-level Monitor orchestrator.
 ///
@@ -112,7 +112,7 @@ impl<'a> Ast1060Monitor<'a> {
     /// When both bits are 0, enforcement is active and SPI commands are filtered.
     fn is_enforcement_active(ctrl: u32) -> bool {
         let pass_bits = (ctrl >> 1) & 0x3;
-        pass_bits == 0  // Enforcement active when passthrough disabled
+        pass_bits == 0 // Enforcement active when passthrough disabled
     }
 
     /// Extract policy lock flag from lock/status register.
@@ -222,7 +222,7 @@ impl<'a> Monitor for Ast1060Monitor<'a> {
             policy_locked: Self::is_policy_locked(lock_status),
             enforcement_active: Self::is_enforcement_active(ctrl),
             violation_count: 0, // NON-BLOCKING TODO: Implement violation log register reading
-                                  // Future: read from SPIPF violation count register if available
+                                // Future: read from SPIPF violation count register if available
         })
     }
 
@@ -241,7 +241,7 @@ impl<'a> Monitor for Ast1060Monitor<'a> {
         // Policy lock is controlled by SPIPF07C register.
         // From aspeed-rust: bit 0 is `wr_dis_of_spipfwa` (write disable for address tables).
         let mut lock_status = regs.read_lock_status();
-        lock_status |= 0x1;  // Set wr_dis_of_spipfwa bit
+        lock_status |= 0x1; // Set wr_dis_of_spipfwa bit
         regs.write_lock_status(lock_status);
         Ok(())
     }

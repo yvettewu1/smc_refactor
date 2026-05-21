@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #![no_std]
-
 #![deny(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -11,19 +10,17 @@
     clippy::todo,
     clippy::unimplemented
 )]
+use ast10x0_peripherals::scu::{ClockRegisterHalf, PinctrlPin, ScuRegisterHalf, ScuRegisters};
 use ast10x0_peripherals::smc::{FlashConfig, SmcConfig, SmcController, SmcTopology};
-use ast10x0_peripherals::scu::{PinctrlPin, ScuRegisters};
-use ast10x0_peripherals::spimonitor::MonitorPolicy;
 use ast10x0_peripherals::spimonitor::registers::{SpiMonitorController, SpiMonitorRegisters};
 use ast10x0_peripherals::spimonitor::LockedSpiMonitor;
+use ast10x0_peripherals::spimonitor::MonitorPolicy;
 
-pub mod spim_wiring;
 pub mod monitor;
+pub mod spim_wiring;
 
-pub use spim_wiring::{
-    apply_spim_wiring, presets, SpimWiring, SpimWiringError,
-};
 pub use monitor::Ast1060Monitor;
+pub use spim_wiring::{apply_spim_wiring, presets, SpimWiring, SpimWiringError};
 
 /// Policy for handling unknown JEDEC IDs at board-integration level.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -54,6 +51,57 @@ pub struct Ast10x0BoardDescriptor {
     /// Applied in order via `ScuRegisters::apply_pinctrl_group()` before
     /// SPIM routing is programmed and locked.
     pub pinctrl_groups: &'static [&'static [PinctrlPin]],
+}
+
+impl Default for Ast10x0BoardDescriptor {
+    fn default() -> Self {
+        Self::ast10x0_qemu_default()
+    }
+}
+
+/// Runtime board object that executes common AST10x0 initialization steps.
+pub struct Ast10x0Board {
+    descriptor: Ast10x0BoardDescriptor,
+}
+
+impl Ast10x0Board {
+    /// Create a board runtime object from board metadata.
+    #[must_use]
+    pub const fn new(descriptor: Ast10x0BoardDescriptor) -> Self {
+        Self { descriptor }
+    }
+
+    /// Initialize board-level I2C state.
+    ///
+    /// This performs the platform-level I2C initialization sequence:
+    /// 1. Apply pinctrl groups.
+    /// 2. Enable the I2C clock via SCU.
+    /// 3. Assert and deassert the I2C/SMBus controller reset.
+    /// 4. Configure I2C global registers.
+    ///
+    /// # Safety
+    /// Must be called only once during board initialization. The caller must
+    /// ensure no concurrent SCU or I2C accesses occur during this sequence.
+    pub unsafe fn init(&self) {
+        // Unlock SCU once before the sequence of writes.
+        let scu = unsafe { ScuRegisters::new_global_unlocked() };
+
+        for group in self.descriptor.pinctrl_groups {
+            scu.apply_pinctrl_group(group);
+        }
+
+        // Enable I2C clock (Group 0, bit 2).
+        scu.ungate_clock_mask(ClockRegisterHalf::Lower, 1 << 2);
+
+        // Assert then deassert I2C reset (Upper half, bit 2).
+        scu.assert_reset_mask(ScuRegisterHalf::Upper, 1 << 2);
+        delay_us(1000);
+
+        scu.deassert_reset_mask(ScuRegisterHalf::Upper, 1 << 2);
+        delay_us(1000);
+
+        unsafe { ast10x0_peripherals::i2c::init_i2c_global() };
+    }
 }
 
 impl Ast10x0BoardDescriptor {
@@ -102,8 +150,7 @@ impl Ast10x0BoardDescriptor {
             Some(wiring) => {
                 // SAFETY: Caller upholds the exclusivity requirements
                 unsafe {
-                    apply_spim_wiring(scu, self.controller, *wiring, &self.monitor_policy)
-                        .map(Some)
+                    apply_spim_wiring(scu, self.controller, *wiring, &self.monitor_policy).map(Some)
                 }
             }
             None => {
@@ -400,5 +447,17 @@ impl Ast1060Board {
             self.read_blocked_region_count,
             self.write_blocked_region_count,
         )
+    }
+}
+
+/// Simple busy-wait delay in microseconds.
+///
+/// This is a placeholder; production code should use a proper timer or delay
+/// provider. Spins for approximately `micros` microseconds.
+#[inline]
+fn delay_us(micros: u32) {
+    // Very rough approximation: ~16 cycles per microsecond on Cortex-M4 @ ~50MHz.
+    for _ in 0..(micros * 16) {
+        core::hint::spin_loop();
     }
 }

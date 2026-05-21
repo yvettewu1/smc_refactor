@@ -27,7 +27,6 @@ use ast10x0_peripherals::scu::ScuRegisters;
 use target_common::{TargetInterface, declare_target};
 use {console_backend as _, entry as _};
 
-
 pub struct Target {}
 
 use core::ptr::read_volatile;
@@ -158,7 +157,6 @@ fn run_smc_smoke_test() -> Result<(), SmcError> {
 
     Ok(())
 }
-
 
 impl TargetInterface for Target {
     const NAME: &'static str = "AST10x0 SMC Smoke Test";

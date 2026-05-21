@@ -1378,7 +1378,7 @@
     },
     "@@pigweed+//pw_toolchain/rust:extensions.bzl%pw_rust": {
       "general": {
-        "bzlTransitiveDigest": "VbWv5Ea8Ymo5+WBLsxmIiRRjVMUDImyeIdt8xvmCgsU=",
+        "bzlTransitiveDigest": "pgIzHfEddbhXUbve/37TS47X2hejoZWVVGcbEcnA3mc=",
         "usagesDigest": "YzpIXmFoIn9Cty7YZXsgNJ/4mLBN2bczMIkTIU/Lf2o=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
