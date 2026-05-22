@@ -76,7 +76,7 @@ fn run_error_granularity_test() -> Result<(), SmcError> {
     // `dma_read` writes DMA registers and marks state DmaInFlight.  QEMU does
     // not model DMA completion, so the controller stays non-ready for the
     // remainder of this test — which is exactly what we need.
-    fmc.dma_read(0, DMA_DRAM_ADDR, 256)?;
+    fmc.dma_read(ChipSelect::Cs0, 0, DMA_DRAM_ADDR, 256)?;
 
     // Controller should no longer report Ready.
     if fmc.is_ready() {
@@ -95,7 +95,7 @@ fn run_error_granularity_test() -> Result<(), SmcError> {
     }
 
     // --- 4. dma_read while not-ready → ControllerNotReady ---
-    match fmc.dma_read(0, DMA_DRAM_ADDR, 256) {
+    match fmc.dma_read(ChipSelect::Cs0, 0, DMA_DRAM_ADDR, 256) {
         Err(SmcError::ControllerNotReady) => {}
         other => {
             let _ = other;
@@ -107,7 +107,7 @@ fn run_error_granularity_test() -> Result<(), SmcError> {
     //
     // State is checked before arg validation, so even a bad DRAM address
     // should yield ControllerNotReady, not InvalidCapacity.
-    match fmc.dma_read(0, 0x1000_0000 /* outside DMA mask */, 256) {
+    match fmc.dma_read(ChipSelect::Cs0, 0, 0x1000_0000 /* outside DMA mask */, 256) {
         Err(SmcError::ControllerNotReady) => {}
         other => {
             let _ = other;

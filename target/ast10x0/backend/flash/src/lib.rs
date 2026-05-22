@@ -381,8 +381,7 @@ impl FlashBackend for Ast10x0FlashBackend {
 
         // Eligibility: matches `aspeed-rust::read_dma` constraints
         // (alignment of address, length, and DRAM pointer; non-trivial
-        // length). CS1 falls through because the HAL hardcodes the CS0
-        // segment register inside `Smc::dma_read`.
+        // length).
         let dma_eligible = out.len() >= DMA_THRESHOLD
             && address.is_multiple_of(4)
             && out.len().is_multiple_of(4)
@@ -397,7 +396,6 @@ impl FlashBackend for Ast10x0FlashBackend {
             Ok(v) => v,
             Err(_) => return Err(BackendError::InvalidLength),
         };
-        cs
         let r = match &mut self.controller {
             ControllerBackend::Fmc(fmc) => fmc.dma_read(key, address, dram_addr, len_u32),
             ControllerBackend::Spi(spi) => spi.dma_read(key, address, dram_addr, len_u32),

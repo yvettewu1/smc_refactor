@@ -135,7 +135,7 @@ fn check_cs1_writes_fail_on_qemu(cs1: &FlashClient) -> Result<(), pw_status::Err
 }
 
 #[entry]
-fn entry() -> ! {
+fn entry() {
     let cs0 = FlashClient::new(handle::FLASH_CS0);
     let cs1 = FlashClient::new(handle::FLASH_CS1);
 

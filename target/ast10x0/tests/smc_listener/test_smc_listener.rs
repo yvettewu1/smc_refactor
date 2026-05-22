@@ -59,7 +59,7 @@ fn run() -> Result<()> {
 }
 
 #[entry]
-fn entry() -> ! {
+fn entry() {
     // Only the server app triggers test shutdown.
     let _ = run();
     loop {}

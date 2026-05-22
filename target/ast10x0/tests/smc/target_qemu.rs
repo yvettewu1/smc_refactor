@@ -29,7 +29,9 @@
 #![no_std]
 #![no_main]
 
-use ast10x0_peripherals::smc::{FlashConfig, SmcConfig, SmcController, SmcError, SmcTopology, UninitSmc};
+use ast10x0_peripherals::smc::{
+    ChipSelect, FlashConfig, SmcConfig, SmcController, SmcError, SmcTopology, UninitSmc,
+};
 use cortex_m_semihosting::debug::{EXIT_FAILURE, EXIT_SUCCESS, exit};
 use target_common::{TargetInterface, declare_target};
 use {console_backend as _, entry as _};
@@ -65,7 +67,7 @@ fn run_smc_qemu_test() -> Result<(), SmcError> {
     // cycle, confirming the full path: segment register encoding → flash window
     // address (0x80000000) → m25p80 model → buffer.
     let mut buf = [0u8; 8];
-    let n = controller.read(0, &mut buf)?;
+    let n = controller.read(ChipSelect::Cs0, 0, &mut buf)?;
     if n != 8 {
         return Err(SmcError::HardwareError);
     }
@@ -77,14 +79,14 @@ fn run_smc_qemu_test() -> Result<(), SmcError> {
 
     // --- 3. PIO read — bounds rejection ---
     let mut overflow_buf = [0u8; 8];
-    match controller.read(0x000F_FFFF, &mut overflow_buf) {
+    match controller.read(ChipSelect::Cs0, 0x000F_FFFF, &mut overflow_buf) {
         Err(SmcError::InvalidCapacity) => {}
         Err(other) => return Err(other),
         Ok(_) => return Err(SmcError::HardwareError),
     }
 
     // --- 4. DMA args rejection — unaligned DRAM address ---
-    match controller.dma_read(0, 0x2, 256) {
+    match controller.dma_read(ChipSelect::Cs0, 0, 0x2, 256) {
         Err(SmcError::InvalidCapacity) => Ok(()),
         Err(other) => Err(other),
         Ok(()) => Err(SmcError::HardwareError),

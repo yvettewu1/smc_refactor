@@ -259,7 +259,7 @@ impl Smc<Ready> {
         // is a no-op and the spin condition is immediately false. Safe to call
         // unconditionally on all controllers, matching aspeed-rust's approach.
         self.regs.acquire_dma_arbiter();
-   
+        pw_log::debug!("acquired dma bus arbiter");
         // Program DMA registers in the order used by aspeed-rust fmccontroller.rs::read_dma:
         //   fmc084 = flash side DMA address (R_DMA_FLASH_ADDR)
         //            = flash_window_base[cs] - SPI_DMA_FLASH_MAP_BASE + cs_offset
@@ -278,13 +278,14 @@ impl Smc<Ready> {
         // arms the IRQ before starting DMA for the same reason
         // (`spicontroller.rs::read_dma`).
         if self.config.enable_interrupts {
+            pw_log::debug!("enable dma irq");
             self.regs.enable_dma_irq();
         }
-        Self::loop_delay(0x1000);
+
         // Kick DMA via read-modify-write to preserve timing calibration
         // bits (fmc080 bits 8-19), matching aspeed-rust fmccontroller.rs::read_dma.
+        pw_log::debug!("start dma read...");
         self.regs.kick_dma_read();
-        Self::loop_delay(0x1000);
         self.state = SmcState::DmaInFlight;
         Ok(())
     }
@@ -342,6 +343,7 @@ impl Smc<Ready> {
     pub fn handle_dma_irq(&mut self) -> Result<SmcInterrupt, SmcError> {
         self.regs.disable_dma_irq();
         let status = self.dma_status();
+        pw_log::info!("SMC handle_dma_irq: status=0x{:08x}", status as u32);
         if status & DMA_STATUS_RELEVANT_BITS == 0 {
             return Err(SmcError::ControllerNotReady);
         }

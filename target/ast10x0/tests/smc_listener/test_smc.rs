@@ -47,7 +47,7 @@ fn run() -> Result<()> {
 }
 
 #[entry]
-fn entry() -> ! {
+fn entry() {
     let ret = run();
     let _ = syscall::debug_shutdown(ret);
     loop {}

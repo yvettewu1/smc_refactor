@@ -11,7 +11,7 @@ use userspace::entry;
 use userspace::syscall::{self, Signals};
 
 #[entry]
-fn entry() -> ! {
+fn entry() {
     let Ok(mut backend) = Backend::new_spi1_pre_wired() else {
         // Init failed at boot. No recovery path for a flash server without
         // a flash; halt the userspace task. `loop {}` is used (not panic!)

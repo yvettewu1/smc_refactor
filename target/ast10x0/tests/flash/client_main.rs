@@ -95,7 +95,7 @@ fn check_fmc_self_update_flow(client: &FlashClient) -> Result<(), pw_status::Err
 }
 
 #[entry]
-fn entry() -> ! {
+fn entry() {
     let fmc = FlashClient::new(handle::FLASH_FMC);
     let spi1 = FlashClient::new(handle::FLASH_SPI1);
     let spi2 = FlashClient::new(handle::FLASH_SPI2);

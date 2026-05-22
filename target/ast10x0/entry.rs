@@ -120,9 +120,8 @@ macro_rules! default_handler {
     };
 }
 
-// Default stub handlers for peripherals not yet implemented
 default_handler!(
-    fmc, gpio, hace,
+    gpio, hace,
     i2c, i2c1, i2c2, i2c3, i2c4, i2c5, i2c6, i2c7, i2c8, i2c9, i2c10, i2c11, i2c12, i2c13,
     i2cfilter,
     i3c, i3c1, i3c2, i3c3,

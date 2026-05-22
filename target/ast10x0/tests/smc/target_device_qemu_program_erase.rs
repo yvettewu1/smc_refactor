@@ -141,7 +141,7 @@ fn run_device_program_erase_test() -> Result<(), SmcError> {
     // Invariant: after raw user-mode transactions, controller must have
     // restored normal-read mode so mapped reads still work.
     let mut mapped_probe = [0u8; 16];
-    let read_len = fmc.read(raw_test_offset, &mut mapped_probe)?;
+    let read_len = fmc.read(ChipSelect::Cs0, raw_test_offset, &mut mapped_probe)?;
     if read_len != mapped_probe.len() {
         return Err(SmcError::HardwareError);
     }
