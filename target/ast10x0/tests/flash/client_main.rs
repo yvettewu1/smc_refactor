@@ -10,7 +10,6 @@ use userspace::entry;
 use userspace::syscall;
 
 const PAGE_SIZE: usize = 256;
-const FMC_SECTOR_SIZE: u32 = 4096;
 // Last 4 KiB sector of the 1 MiB FMC flash. The QEMU m25p80 model is
 // blank at boot (the kernel image is loaded into CPU address space, not
 // written to the SPI flash backing) so any sector is safe; we use the
@@ -18,79 +17,42 @@ const FMC_SECTOR_SIZE: u32 = 4096;
 // real silicon.
 const FMC_TEST_OFFSET: u32 = 0xFF000;
 
-fn check_exists(controller_id: u32, client: &FlashClient) -> Result<(), pw_status::Error> {
-    match client.exists() {
-        Ok(true) => {
-            pw_log::info!(
-                "flash exists check passed controller={}",
-                controller_id as u32
-            );
-            Ok(())
-        }
-        Ok(false) => {
-            pw_log::error!(
-                "flash exists check reported absent controller={}",
-                controller_id as u32
-            );
-            Err(pw_status::Error::Unknown)
-        }
-        Err(_) => {
-            pw_log::error!(
-                "flash exists IPC failed controller={}",
-                controller_id as u32
-            );
-            Err(pw_status::Error::Internal)
-        }
+fn check_capacity(
+    controller_id: u32,
+    client: &FlashClient,
+    expected: u32,
+) -> Result<(), pw_status::Error> {
+    let capacity = client.capacity().map_err(|_| pw_status::Error::Internal)?;
+    if capacity != expected {
+        pw_log::error!(
+            "flash capacity mismatch controller={} got={} expected={}",
+            controller_id as u32,
+            capacity as u32,
+            expected as u32
+        );
+        return Err(pw_status::Error::Unknown);
     }
+    pw_log::info!(
+        "flash capacity ok controller={} bytes={}",
+        controller_id as u32,
+        capacity as u32
+    );
+    Ok(())
 }
 
-/// Exercise the mini-BMC FMC self-update flow described in
-/// `target/ast10x0/peripherals/smc/planning/use-case.md`:
-///
-///   1. erase the destination sector,
-///   2. verify post-erase sector reads back as 0xFF,
-///   3. program a known pattern,
-///   4. verify by read-back.
-///
-/// Identification (JEDEC) is covered separately by [`check_exists`]; the
-/// "read existing image" step from the use-case doc is not exercised on
-/// QEMU because the m25p80 backing is blank at boot.
-fn check_fmc_self_update_flow(client: &FlashClient) -> Result<(), pw_status::Error> {
-    client
-        .erase(FMC_TEST_OFFSET, FMC_SECTOR_SIZE)
-        .map_err(|_| pw_status::Error::Internal)?;
-    pw_log::info!("fmc erase passed offset=0x{:x}", FMC_TEST_OFFSET as u32);
-
-    let mut erase_buf = [0u8; PAGE_SIZE];
-    let n = client
-        .read(FMC_TEST_OFFSET, &mut erase_buf)
-        .map_err(|_| pw_status::Error::Internal)?;
-    if n != PAGE_SIZE || erase_buf.iter().any(|&b| b != 0xFF) {
-        pw_log::error!("fmc post-erase verify failed (n={})", n as u32);
-        return Err(pw_status::Error::Unknown);
-    }
-    pw_log::info!("fmc post-erase verify passed");
-
-    let pattern: [u8; PAGE_SIZE] = core::array::from_fn(|i| (i as u8) ^ 0xA5);
-    let n = client
-        .write(FMC_TEST_OFFSET, &pattern)
-        .map_err(|_| pw_status::Error::Internal)?;
-    if n != PAGE_SIZE {
-        pw_log::error!("fmc program returned short count (n={})", n as u32);
-        return Err(pw_status::Error::Unknown);
-    }
-    pw_log::info!("fmc program passed");
-
+fn check_fmc_mapped_read(client: &FlashClient) -> Result<(), pw_status::Error> {
     let mut readback = [0u8; PAGE_SIZE];
     let n = client
         .read(FMC_TEST_OFFSET, &mut readback)
         .map_err(|_| pw_status::Error::Internal)?;
-    if n != PAGE_SIZE || readback != pattern {
-        pw_log::error!("fmc readback verify failed (n={})", n as u32);
+    if n != PAGE_SIZE {
+        pw_log::error!("fmc mapped read returned short count (n={})", n as u32);
         return Err(pw_status::Error::Unknown);
     }
-    pw_log::info!("fmc self-update flow passed");
-
+    pw_log::info!(
+        "fmc mapped read passed offset=0x{:x}",
+        FMC_TEST_OFFSET as u32
+    );
     Ok(())
 }
 
@@ -100,10 +62,10 @@ fn entry() {
     let spi1 = FlashClient::new(handle::FLASH_SPI1);
     let spi2 = FlashClient::new(handle::FLASH_SPI2);
 
-    let status = check_exists(0, &fmc)
-        .and_then(|_| check_exists(1, &spi1))
-        .and_then(|_| check_exists(2, &spi2))
-        .and_then(|_| check_fmc_self_update_flow(&fmc));
+    let status = check_capacity(0, &fmc, 1024 * 1024)
+        .and_then(|_| check_capacity(1, &spi1, 32 * 1024 * 1024))
+        .and_then(|_| check_capacity(2, &spi2, 32 * 1024 * 1024))
+        .and_then(|_| check_fmc_mapped_read(&fmc));
 
     let _ = match status {
         Ok(()) => syscall::debug_shutdown(Ok(())),

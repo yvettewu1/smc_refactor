@@ -1328,7 +1328,7 @@
     },
     "@@pigweed+//pw_toolchain/cc:pw_cxx_toolchain.bzl%pw_cxx_toolchain": {
       "general": {
-        "bzlTransitiveDigest": "o5T1lq0oTYxRHbH+8Y8TFaLkYph4PuatsbVUnwxmmpg=",
+        "bzlTransitiveDigest": "ur0PgZTSpo9gLUum1tYMVnAibSN5cy89N+uaHAxXtKU=",
         "usagesDigest": "VJKzSLvYrPIp3N/cUgLBxWOQL+32xuBhnqLFoukfvvQ=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -1378,7 +1378,7 @@
     },
     "@@pigweed+//pw_toolchain/rust:extensions.bzl%pw_rust": {
       "general": {
-        "bzlTransitiveDigest": "pgIzHfEddbhXUbve/37TS47X2hejoZWVVGcbEcnA3mc=",
+        "bzlTransitiveDigest": "VbWv5Ea8Ymo5+WBLsxmIiRRjVMUDImyeIdt8xvmCgsU=",
         "usagesDigest": "YzpIXmFoIn9Cty7YZXsgNJ/4mLBN2bczMIkTIU/Lf2o=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
