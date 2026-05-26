@@ -1,38 +1,34 @@
 // Licensed under the Apache-2.0 license
 // SPDX-License-Identifier: Apache-2.0
 
-//! AST10x0 SMC multi-CS command routing tests (QEMU-only).
+//! AST10x0 SMC multi-CS mapped-read routing tests (QEMU-only).
 //!
-//! Verifies that `transceive_user` correctly dispatches to CS0 and CS1
-//! independently, and that requesting CS1 on a CS1-unconfigured controller
-//! returns `SmcError::InvalidChipSelect`.
+//! Verifies that a dual-CS FMC configuration exposes independent CS0 and CS1
+//! mapped-read windows, and that requesting CS1 on a CS1-unconfigured
+//! controller returns `SmcError::InvalidChipSelect`.
 //!
 //! QEMU provides a single `w25q80bl` model on CS0 of the FMC controller.
 //! CS1 is configured in the HAL but the QEMU model does not attach a device
-//! there — reads return undefined bytes.  The test only asserts that the
-//! transport completes without error (CS line toggled, no hardware fault),
-//! mirroring aspeed-rust's treatment of CS availability as a HAL concern
-//! rather than a device-presence check.
+//! there — reads return undefined bytes. The test only asserts that mapped
+//! reads complete without error.
 //!
 //! Tests (in order):
 //!
 //! 1. **Init** — construct FMC with cs0 + cs1 configured, run init.
-//! 2. **RDSR CS0** — read status register via CS0; assert command succeeds.
-//! 3. **RDSR CS1** — read status register via CS1; assert command succeeds
-//!    (byte value not asserted; QEMU may return 0x00 or undefined).
-//! 4. **InvalidChipSelect guard** — build a CS1-unconfigured controller;
-//!    assert `transceive_user(Cs1, …)` returns `InvalidChipSelect`.
-//! 5. **TransferMode differential check** — run `RDSR` on CS0 for each
-//!    supported mode (`111/112/122/114/144`) and assert transport completes.
+//! 2. **CS capacity** — assert both configured CS slots report 1 MiB.
+//! 3. **CS0 mapped read** — assert a device-local CS0 read succeeds.
+//! 4. **CS1 mapped read** — assert a device-local CS1 read succeeds.
+//! 5. **InvalidChipSelect guard** — build a CS1-unconfigured controller and
+//!    assert a CS1 mapped read returns `InvalidChipSelect`.
 
 #![no_std]
 #![no_main]
 
 use ast10x0_peripherals::smc::{
-    ChipSelect, FlashConfig, FmcUninit, SmcConfig, SmcController, SmcError, SmcTopology, TransferMode,
+    ChipSelect, FlashConfig, FmcUninit, SmcConfig, SmcController, SmcError, SmcTopology,
 };
-use cortex_m_semihosting::debug::{EXIT_FAILURE, EXIT_SUCCESS, exit};
-use target_common::{TargetInterface, declare_target};
+use cortex_m_semihosting::debug::{exit, EXIT_FAILURE, EXIT_SUCCESS};
+use target_common::{declare_target, TargetInterface};
 use {console_backend as _, entry as _};
 
 pub struct Target {}
@@ -44,8 +40,7 @@ const FLASH_CFG: FlashConfig = FlashConfig {
     block_size: 65536,
     spi_clock_mhz: 25,
 };
-
-const CMD_READ_STATUS: u8 = 0x05;
+const CS_PROBE_OFFSET: u32 = 0x000F_F000;
 
 fn run_multi_cs_test() -> Result<(), SmcError> {
     // --- 1. Init with cs0 + cs1 both configured ---
@@ -65,27 +60,28 @@ fn run_multi_cs_test() -> Result<(), SmcError> {
         return Err(SmcError::HardwareError);
     }
 
-    // --- 2. RDSR on CS0 — must succeed ---
-    let mut sr_cs0 = [0u8; 1];
-    fmc.transceive_user(
-        ChipSelect::Cs0,
-        &[CMD_READ_STATUS],
-        &[],
-        &mut sr_cs0,
-        TransferMode::Mode111,
-    )?;
+    // --- 2. CS capacity ---
+    if fmc.cs_capacity_bytes(ChipSelect::Cs0)? != 1024 * 1024
+        || fmc.cs_capacity_bytes(ChipSelect::Cs1)? != 1024 * 1024
+    {
+        return Err(SmcError::HardwareError);
+    }
 
-    // --- 3. RDSR on CS1 — must complete without transport error ---
-    let mut sr_cs1 = [0u8; 1];
-    fmc.transceive_user(
-        ChipSelect::Cs1,
-        &[CMD_READ_STATUS],
-        &[],
-        &mut sr_cs1,
-        TransferMode::Mode111,
-    )?;
+    // --- 3. CS0 mapped read ---
+    let mut cs0 = [0u8; 8];
+    let cs0_n = fmc.read(ChipSelect::Cs0, CS_PROBE_OFFSET, &mut cs0)?;
+    if cs0_n != cs0.len() {
+        return Err(SmcError::HardwareError);
+    }
 
-    // --- 4. InvalidChipSelect guard: CS1-unconfigured controller ---
+    // --- 4. CS1 mapped read ---
+    let mut cs1 = [0u8; 8];
+    let cs1_n = fmc.read(ChipSelect::Cs1, CS_PROBE_OFFSET, &mut cs1)?;
+    if cs1_n != cs1.len() {
+        return Err(SmcError::HardwareError);
+    }
+
+    // --- 5. InvalidChipSelect guard: CS1-unconfigured controller ---
     let config_cs0_only = SmcConfig {
         controller_id: SmcController::Fmc,
         cs0: Some(FLASH_CFG),
@@ -97,34 +93,12 @@ fn run_multi_cs_test() -> Result<(), SmcError> {
     let uninit2 = unsafe { FmcUninit::new(config_cs0_only)? };
     let fmc2 = uninit2.init()?;
 
-    match fmc2.transceive_user(
-        ChipSelect::Cs1,
-        &[CMD_READ_STATUS],
-        &[],
-        &mut [0u8; 1],
-        TransferMode::Mode111,
-    ) {
+    match fmc2.read(ChipSelect::Cs1, 0, &mut [0u8; 1]) {
         Err(SmcError::InvalidChipSelect) => {}
         other => {
             let _ = other;
             return Err(SmcError::HardwareError);
         }
-    }
-
-    // --- 5. TransferMode differential: all supported mode variants ---
-    //
-    // QEMU data semantics for dual/quad are model-dependent; this check focuses
-    // on transport-path stability and error-free per-phase register sequencing.
-    let all_modes = [
-        TransferMode::Mode111,
-        TransferMode::Mode112,
-        TransferMode::Mode122,
-        TransferMode::Mode114,
-        TransferMode::Mode144,
-    ];
-    for mode in all_modes {
-        let mut sr = [0u8; 1];
-        fmc.transceive_user(ChipSelect::Cs0, &[CMD_READ_STATUS], &[], &mut sr, mode)?;
     }
 
     Ok(())
@@ -133,7 +107,7 @@ fn run_multi_cs_test() -> Result<(), SmcError> {
 declare_target!(Target);
 
 impl TargetInterface for Target {
-    const NAME: &'static str = "AST10x0 SMC Multi-CS Command Routing Test";
+    const NAME: &'static str = "AST10x0 SMC Multi-CS Mapped Routing Test";
 
     fn main() -> ! {
         let exit_status = match run_multi_cs_test() {

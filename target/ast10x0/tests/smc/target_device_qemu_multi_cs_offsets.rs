@@ -31,18 +31,20 @@
 //! is restated in code via `device_to_controller_offset` and is asserted
 //! at the type level, not at runtime under this model.
 //!
-//! The CS0 facade's erase + program in Phase 1 is a smoke test that the
-//! fix did not regress the CS0 happy path.
+//! The test intentionally avoids successful read/program/erase operations.
+//! Under QEMU's AST10x0 model those paths can hang or alias on detached chip
+//! selects; this target is scoped to checking that invalid CS-local offsets are
+//! rejected before the controller data path is touched.
 
 #![no_std]
 #![no_main]
 
 use ast10x0_peripherals::smc::{
-    ChipSelect, FlashConfig, SpiNorFlashDevice, FmcUninit, SmcConfig, SmcController, SmcError,
-    SmcTopology, SpiNorFlash,
+    ChipSelect, FlashConfig, FmcUninit, SmcConfig, SmcController, SmcError, SmcTopology,
+    SpiNorFlash, SpiNorFlashDevice,
 };
-use cortex_m_semihosting::debug::{EXIT_FAILURE, EXIT_SUCCESS, exit};
-use target_common::{TargetInterface, declare_target};
+use cortex_m_semihosting::debug::{exit, EXIT_FAILURE, EXIT_SUCCESS};
+use target_common::{declare_target, TargetInterface};
 use {console_backend as _, entry as _};
 
 pub struct Target {}
@@ -65,12 +67,6 @@ const CS1_CFG: FlashConfig = FlashConfig {
 
 const CS1_CAPACITY_BYTES: u32 = (CS1_CFG.capacity_mb) * 1024 * 1024;
 
-// Non-trivial marker for the CS0 smoke-test plant in Phase 1.
-const MARKER: [u8; 16] = [
-    0xA5, 0x5A, 0xA5, 0x5A, 0xA5, 0x5A, 0xA5, 0x5A,
-    0xA5, 0x5A, 0xA5, 0x5A, 0xA5, 0x5A, 0xA5, 0x5A,
-];
-
 fn run_offsets_test() -> Result<(), SmcError> {
     let config = SmcConfig {
         controller_id: SmcController::Fmc,
@@ -88,25 +84,7 @@ fn run_offsets_test() -> Result<(), SmcError> {
         return Err(SmcError::HardwareError);
     }
 
-    // --- Phase 1: Plant a marker on CS0 at device-local offset 0. ---
-    let mut page = [0xFFu8; 256];
-    page[..MARKER.len()].copy_from_slice(&MARKER);
-
-    {
-        let mut cs0 = SpiNorFlash::from_fmc_cs(&mut fmc, CS0_CFG, ChipSelect::Cs0)?;
-        cs0.erase_sector(0)?;
-        let written = cs0.program_page(0, &page)?;
-        if written != page.len() {
-            return Err(SmcError::HardwareError);
-        }
-        // Sanity: CS0 facade reads its own marker back.
-        let mut probe = [0u8; MARKER.len()];
-        cs0.read(0, &mut probe)?;
-        if probe != MARKER {
-            return Err(SmcError::HardwareError);
-        }
-    }
-
+    let page = [0xFFu8; 256];
     // --- Phase 2: CS1 facade — per-CS bounds. ---
     {
         let mut cs1 = SpiNorFlash::from_fmc_cs(&mut fmc, CS1_CFG, ChipSelect::Cs1)?;

@@ -9,13 +9,14 @@
 #![no_std]
 #![no_main]
 
-use ast10x0_board::{SpimWiring, apply_spim_wiring, presets};
+use ast10x0_board::{apply_spim_wiring, presets, SpimWiring};
 use ast10x0_peripherals::scu::ScuRegisters;
 use ast10x0_peripherals::smc::SmcController;
 use ast10x0_peripherals::spimonitor::MonitorPolicy;
 use codegen_dual_cs as codegen;
-use cortex_m_semihosting::debug::{EXIT_FAILURE, EXIT_SUCCESS, exit};
-use target_common::{TargetInterface, declare_target};
+use console_backend::console_backend_write_all;
+use cortex_m_semihosting::debug::{exit, EXIT_FAILURE, EXIT_SUCCESS};
+use target_common::{declare_target, TargetInterface};
 use {console_backend as _, entry as _};
 
 static BMC_POLICY: MonitorPolicy = presets::bmc_default_policy();
@@ -64,7 +65,17 @@ impl TargetInterface for Target {
     }
 
     fn shutdown(code: u32) -> ! {
-        let status = if code == 0 { EXIT_SUCCESS } else { EXIT_FAILURE };
+        let sentinel: &[u8] = if code == 0 {
+            b"TEST_RESULT:PASS\n"
+        } else {
+            b"TEST_RESULT:FAIL\n"
+        };
+        let _ = console_backend_write_all(sentinel);
+        let status = if code == 0 {
+            EXIT_SUCCESS
+        } else {
+            EXIT_FAILURE
+        };
         exit(status);
         #[expect(clippy::empty_loop)]
         loop {}
