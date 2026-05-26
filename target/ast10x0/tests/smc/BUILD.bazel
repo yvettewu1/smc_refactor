@@ -8,6 +8,11 @@ load("@pigweed//pw_kernel/tooling/panic_detector:rust_binary_no_panics_test.bzl"
 load("@rules_rust//rust:defs.bzl", "rust_binary")
 load("//target/ast10x0:defs.bzl", "TARGET_COMPATIBLE_WITH")
 
+exports_files(
+    ["target_debug.rs"],
+    visibility = ["//target/ast10x0/tests/flash:__pkg__"],
+)
+
 filegroup(
     name = "system_config",
     srcs = ["system.json5"],

@@ -11,7 +11,7 @@ use crate::smc::types::SmcConfig;
 use crate::smc::types::SmcError;
 
 const SMC_WINDOW_SIZE_BYTES: usize = 256 * 1024 * 1024;
-const DMA_MAX_TRANSFER_LENGTH: u32 = 0x20_0000; // 32MBytes 
+const DMA_MAX_TRANSFER_LENGTH: u32 = 0x20_0000; // 32MBytes
 pub(crate) const SPI_CTRL_FREQ_MASK: u32 = 0x0F00_0F00;
 
 /// DMA engine's base address for flash-side memory (fmc084 / spi084).
@@ -57,7 +57,7 @@ pub(crate) struct ValidatedDmaRead {
     pub flash_start: usize,
     /// DMA engine DRAM-side address (written to fmc088 / spi088).
     ///
-    /// Must be 4-byte aligned 
+    /// Must be 4-byte aligned
     pub dram_addr: u32,
     /// Value to write to the DMA length register (transfer length minus one).
     /// [0:24] 0x1F_FFFF:32Mbytes
@@ -73,10 +73,7 @@ pub(crate) fn flash_capacity_bytes(config: Option<FlashConfig>) -> Result<usize,
     }
 }
 
-pub(crate) fn cs_capacity_bytes(
-    config: &SmcConfig,
-    cs: ChipSelect,
-) -> Result<usize, SmcError> {
+pub(crate) fn cs_capacity_bytes(config: &SmcConfig, cs: ChipSelect) -> Result<usize, SmcError> {
     let slot = match cs {
         ChipSelect::Cs0 => config.cs0,
         ChipSelect::Cs1 => config.cs1,
@@ -93,7 +90,9 @@ pub(crate) fn total_capacity_bytes(
 ) -> Result<usize, SmcError> {
     let cs0_size = flash_capacity_bytes(cs0)?;
     let cs1_size = flash_capacity_bytes(cs1)?;
-    let total = cs0_size.checked_add(cs1_size).ok_or(SmcError::InvalidCapacity)?;
+    let total = cs0_size
+        .checked_add(cs1_size)
+        .ok_or(SmcError::InvalidCapacity)?;
     if total > SMC_WINDOW_SIZE_BYTES {
         return Err(SmcError::InvalidCapacity);
     }
@@ -127,12 +126,12 @@ pub(crate) fn validate_dma_read(
     flash_win_base: usize,
     cs_capacity: usize,
     dram_addr: usize,
-    len: u32
+    len: u32,
 ) -> Result<ValidatedDmaRead, SmcError> {
     if len == 0 || len > DMA_MAX_TRANSFER_LENGTH {
         return Err(SmcError::InvalidCapacity);
     }
-    
+
     // Flash offset must be 4-byte aligned (spec §1.3, matching aspeed-rust).
     if flash_offset & 0x3 != 0 {
         return Err(SmcError::InvalidCapacity);
@@ -157,7 +156,7 @@ pub(crate) fn validate_dma_read(
     if dram_addr & 0x3 != 0 {
         return Err(SmcError::InvalidCapacity);
     }
- 
+
     Ok(ValidatedDmaRead {
         flash_start,
         dram_addr,
@@ -169,8 +168,8 @@ pub(crate) fn validate_dma_read(
 ///
 /// Hardware uses 512 KB units for addressing.
 pub(crate) fn encode_segment(start: usize, end: usize) -> Result<u32, SmcError> {
-    let start_512k = (start >> 20) as u32;
-    let end_512k = ((end >> 20) - 1 ) as u32;
+    let start_512k = (start >> 19) as u32;
+    let end_512k = ((end >> 19) - 1) as u32;
 
     if start_512k > 0xFFFF || end_512k > 0xFFFF {
         return Err(SmcError::InvalidCapacity);
@@ -212,7 +211,7 @@ pub(crate) fn spi_freq_div(sysclk_mhz: u32, max_freq_mhz: u32) -> Result<u32, Sm
 ///
 /// # Arguments
 /// * `buf` - slice of bytes (each should be 0 or 1).
-pub(crate) fn get_mid_point_of_longest_one(buf: &[u8]) -> i32{
+pub(crate) fn get_mid_point_of_longest_one(buf: &[u8]) -> i32 {
     let mut start = 0;
     let mut mid_point = 0;
     let mut max_cnt = 0;
@@ -239,7 +238,7 @@ pub(crate) fn get_mid_point_of_longest_one(buf: &[u8]) -> i32{
     }
 }
 
-pub(crate) fn spi_calibration_enable(buf: &[u8]) -> Result<bool, SmcError>  {
+pub(crate) fn spi_calibration_enable(buf: &[u8]) -> Result<bool, SmcError> {
     if buf.len() < 4 {
         return Ok(false);
     }
@@ -262,8 +261,6 @@ pub(crate) fn spi_calibration_enable(buf: &[u8]) -> Result<bool, SmcError>  {
     Ok(false)
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -271,10 +268,30 @@ mod tests {
     #[test]
     fn test_encode_segment() {
         let seg = encode_segment(0, 16 * 1024 * 1024).unwrap();
-        let start_4k = seg & 0xFFFF;
-        let end_4k = (seg >> 16) & 0xFFFF;
-        assert_eq!(start_4k, 0);
-        assert_eq!(end_4k, 4096);
+        let start_512k = seg & 0xFFFF;
+        let end_512k = (seg >> 16) & 0xFFFF;
+        assert_eq!(start_512k, 0);
+        assert_eq!(end_512k, 31);
+    }
+
+    #[test]
+    fn test_encode_segment_8mb_cs0() {
+        let seg = encode_segment(0, 8 * 1024 * 1024).unwrap();
+        let start_512k = seg & 0xFFFF;
+        let end_512k = (seg >> 16) & 0xFFFF;
+        assert_eq!(start_512k, 0);
+        assert_eq!(end_512k, 15);
+    }
+
+    #[test]
+    fn test_encode_segment_64mb_cs1_after_8mb_cs0() {
+        let start = 8 * 1024 * 1024;
+        let end = start + 64 * 1024 * 1024;
+        let seg = encode_segment(start, end).unwrap();
+        let start_512k = seg & 0xFFFF;
+        let end_512k = (seg >> 16) & 0xFFFF;
+        assert_eq!(start_512k, 16);
+        assert_eq!(end_512k, 143);
     }
 
     fn decode_divisor(encoded: u32) -> u32 {
@@ -362,9 +379,8 @@ mod tests {
 
     #[test]
     fn test_validate_dma_read_accepts_valid_request() {
-        let validated = validate_dma_read(
-            0x1000, TEST_WINDOW, TEST_CS0_CAP, 0x0008_0000, 512
-        ).unwrap();
+        let validated =
+            validate_dma_read(0x1000, TEST_WINDOW, TEST_CS0_CAP, 0x0008_0000, 512).unwrap();
         assert_eq!(validated.flash_start, 0x2000_1000); // 0x8000_0000 - 0x6000_0000 + 0x1000
         assert_eq!(validated.dram_addr, 0x0008_0000);
         assert_eq!(validated.dma_len_reg, 511);
@@ -377,9 +393,8 @@ mod tests {
         const CS0_CAP: usize = 16 * 1024 * 1024;
         const TOTAL_CAP: usize = 32 * 1024 * 1024;
         let cs1_offset = CS0_CAP + 0x1000;
-        let validated = validate_dma_read(
-            cs1_offset as u32, DUAL_WINDOW, CS0_CAP, 0x0008_0000, 512
-        ).unwrap();
+        let validated =
+            validate_dma_read(cs1_offset as u32, DUAL_WINDOW, CS0_CAP, 0x0008_0000, 512).unwrap();
         // fmc084 = 0x8100_0000 - 0x6000_0000 + 0x1000 = 0x2100_1000
         assert_eq!(validated.flash_start, 0x2100_1000);
         assert_eq!(validated.dma_len_reg, 511);

@@ -10,7 +10,9 @@
     clippy::todo,
     clippy::unimplemented
 )]
-use ast10x0_peripherals::scu::{ClockRegisterHalf, PinctrlPin, ScuRegisterHalf, ScuRegisters};
+use ast10x0_peripherals::scu::{
+    pinctrl::PINCTRL_FMC_QUAD, ClockRegisterHalf, PinctrlPin, ScuRegisterHalf, ScuRegisters,
+};
 use ast10x0_peripherals::smc::{FlashConfig, SmcConfig, SmcController, SmcTopology};
 use ast10x0_peripherals::spimonitor::registers::{SpiMonitorController, SpiMonitorRegisters};
 use ast10x0_peripherals::spimonitor::LockedSpiMonitor;
@@ -311,7 +313,14 @@ impl Ast10x0BoardDescriptor {
     /// `FMC_CS0_CAPACITY` / `FMC_CS1_CAPACITY` at lines 58-59.
     pub fn ast1060_evb_fmc_aspeed_rust_derived() -> Self {
         let cfg = FlashConfig {
-            capacity_mb: 1,
+            capacity_mb: 8,
+            page_size: 256,
+            sector_size: 4096,
+            block_size: 65536,
+            spi_clock_mhz: 50,
+        };
+        let cfg1 = FlashConfig {
+            capacity_mb: 32,
             page_size: 256,
             sector_size: 4096,
             block_size: 65536,
@@ -320,11 +329,11 @@ impl Ast10x0BoardDescriptor {
         Self {
             controller: SmcController::Fmc,
             cs0: Some(cfg),
-            cs1: Some(cfg),
+            cs1: Some(cfg1),
             unknown_jedec_policy: UnknownJedecPolicy::StrictReject,
             spim_wiring: None,
             monitor_policy: MonitorPolicy::empty(),
-            pinctrl_groups: &[],
+            pinctrl_groups: &[PINCTRL_FMC_QUAD],
         }
     }
 
