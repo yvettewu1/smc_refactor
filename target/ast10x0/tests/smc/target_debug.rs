@@ -9,11 +9,7 @@ pub fn dump_smc_register(addr: u32, count: u32) {
         let reg_addr = addr + (i * 4);
         let reg = unsafe { read_volatile(reg_addr as *const u32) };
 
-        pw_log::info!(
-            "SMC[0x{:08x}] = 0x{:08x}",
-            reg_addr as u32,
-            reg as u32
-        );
+        pw_log::info!("SMC[0x{:08x}] = 0x{:08x}", reg_addr as u32, reg as u32);
     }
 }
 

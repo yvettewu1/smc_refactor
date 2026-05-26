@@ -86,6 +86,40 @@ rust_binary_no_panics_test(
 )
 
 rust_binary(
+    name = "target_read_test",
+    crate_root = "target_read.rs",
+    srcs = [
+        "target_read.rs",
+        "target_debug.rs",
+    ],
+    edition = "2024",
+    tags = ["kernel"],
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+    deps = [
+        ":codegen",
+        ":dma_irq_linker_script",
+        "//target/ast10x0:entry",
+        "//target/ast10x0/peripherals",
+        "@pigweed//pw_kernel/arch/arm_cortex_m:arch_arm_cortex_m",
+        "@pigweed//pw_kernel/kernel",
+        "@pigweed//pw_kernel/subsys/console:console_backend",
+        "@pigweed//pw_kernel/target:target_common",
+        "@pigweed//pw_log/rust:pw_log",
+        "@rust_crates//:cortex-m-semihosting",
+    ],
+)
+
+system_image(
+    name = "smc_read_test",
+    kernel = ":target_read_test",
+    platform = "//target/ast10x0",
+    system_config = ":system_config_dma_irq",
+    tags = ["kernel"],
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+    userspace = False,
+)
+
+rust_binary(
     name = "target_dma_irq",
     srcs = [
         "target_dma_irq.rs",
@@ -108,7 +142,7 @@ rust_binary(
 )
 
 system_image(
-    name = "smc_test_irq",
+    name = "smc_irq_test",
     kernel = ":target_dma_irq",
     platform = "//target/ast10x0",
     system_config = ":system_config_dma_irq",
