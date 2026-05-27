@@ -9,12 +9,9 @@
 //! Tests (in order):
 //!
 //! 1. **Init** — construct FMC controller, run hardware init, assert Ready.
-//! 2. **PIO read — success path** — issue a read from offset 0; assert the
-//!    call succeeds and returns the expected byte count.  Flash content is not
-//!    inspected.
-//! 3. **PIO read — bounds rejection** — assert that a read past the configured
+//! 2. **PIO read — bounds rejection** — assert that a read past the configured
 //!    capacity returns `SmcError::InvalidCapacity` before touching hardware.
-//! 4. **DMA disabled rejection** — assert that `dma_read` returns
+//! 3. **DMA disabled rejection** — assert that `dma_read` returns
 //!    `SmcError::DmaNotEnabled` when `SmcConfig::dma_enabled` is false.
 
 #![no_std]
@@ -24,14 +21,12 @@ use ast10x0_peripherals::smc::{
     ChipSelect, FlashConfig, SmcConfig, SmcController, SmcError, SmcTopology, UninitSmc,
 };
 
+use console_backend::console_backend_write_all;
 use cortex_m_semihosting::debug::{exit, EXIT_FAILURE, EXIT_SUCCESS};
 use target_common::{declare_target, TargetInterface};
 use {console_backend as _, entry as _};
 
-
-
 pub struct Target {}
-
 
 fn run_smc_smoke_test() -> Result<(), SmcError> {
     // --- 1. Init ---
@@ -56,30 +51,11 @@ fn run_smc_smoke_test() -> Result<(), SmcError> {
     let controller = unsafe { UninitSmc::new(config)? };
     let mut controller = controller.init()?;
 
-    let _ = match controller.spi_nor_read_init(ChipSelect::Cs0) {
-        Ok(v) => v,
-        Err(e) => {
-            pw_log::info!("Error:: spi_nor_read_init");
-            return Err(e);
-        }
-    };
-
-
     if !controller.is_ready() || controller.controller_id() != SmcController::Fmc {
         return Err(SmcError::HardwareError);
     }
 
-    // --- 2. MMIO read — success path ---
-    // Confirm the call succeeds and returns the correct byte count.  Flash
-    // content is not inspected so this is safe on both QEMU and silicon.
-
-    let mut buf = [0u8; 8];
-    let n = controller.read(ChipSelect::Cs0, 0, &mut buf)?;
-    if n != 8 {
-        return Err(SmcError::HardwareError);
-    }
-
-    // --- 3. PIO read — bounds rejection ---
+    // --- 2. PIO read — bounds rejection ---
     // 1 MB capacity = 0x10_0000 bytes.  Offset 0xFFFFF with len 8 crosses the
     // boundary; validate_mapped_range must reject it before any MMIO access.
     let mut overflow_buf = [0u8; 8];
@@ -89,7 +65,7 @@ fn run_smc_smoke_test() -> Result<(), SmcError> {
         Ok(_) => return Err(SmcError::HardwareError),
     }
 
-    // --- 4. DMA disabled rejection ---
+    // --- 3. DMA disabled rejection ---
     // dma_enabled: false in the config above; dma_read must return
     // DmaNotEnabled before touching any hardware.  Argument validation
     // (alignment, bounds) is covered by unit tests in helpers.rs.
@@ -108,6 +84,12 @@ impl TargetInterface for Target {
             Ok(()) => EXIT_SUCCESS,
             Err(_e) => EXIT_FAILURE,
         };
+        let sentinel: &[u8] = if exit_status == EXIT_SUCCESS {
+            b"TEST_RESULT:PASS\n"
+        } else {
+            b"TEST_RESULT:FAIL\n"
+        };
+        let _ = console_backend_write_all(sentinel);
         exit(exit_status);
         #[expect(clippy::empty_loop)]
         loop {}

@@ -434,6 +434,11 @@ impl Smc<Ready> {
         self.state == SmcState::Idle
     }
 
+    #[doc(hidden)]
+    pub fn test_force_dma_in_flight(&mut self) {
+        self.state = SmcState::DmaInFlight;
+    }
+
     /// Get the controller identifier.
     pub fn controller_id(&self) -> SmcController {
         self.controller_id

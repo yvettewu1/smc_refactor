@@ -18,7 +18,9 @@
 
 use crate::smc::controller::{ReadySmc, UninitSmc};
 use crate::smc::interrupts::SmcInterrupt;
-use crate::smc::types::{ChipSelect, FlashConfig, SmcConfig, SmcController, SmcError, TransferMode};
+use crate::smc::types::{
+    ChipSelect, FlashConfig, SmcConfig, SmcController, SmcError, TransferMode,
+};
 
 /// FMC handle before hardware initialization.
 pub struct FmcUninit {
@@ -57,7 +59,13 @@ impl FmcReady {
     }
 
     /// Initiate a DMA read operation.
-    pub fn dma_read(&mut self, cs: ChipSelect, flash_offset: u32, dram_addr: usize, len: u32) -> Result<(), SmcError> {
+    pub fn dma_read(
+        &mut self,
+        cs: ChipSelect,
+        flash_offset: u32,
+        dram_addr: usize,
+        len: u32,
+    ) -> Result<(), SmcError> {
         self.inner.dma_read(cs, flash_offset, dram_addr, len)
     }
 
@@ -84,6 +92,11 @@ impl FmcReady {
     /// Check if FMC is ready for operations.
     pub fn is_ready(&self) -> bool {
         self.inner.is_ready()
+    }
+
+    #[doc(hidden)]
+    pub fn test_force_dma_in_flight(&mut self) {
+        self.inner.test_force_dma_in_flight();
     }
 
     /// Return configured flash capacity in bytes.
@@ -124,7 +137,8 @@ impl FmcReady {
         rx: &mut [u8],
         mode: TransferMode,
     ) -> Result<(), SmcError> {
-        self.inner.transceive_user(ChipSelect::Cs0, cmd, tx_payload, rx, mode)
+        self.inner
+            .transceive_user(ChipSelect::Cs0, cmd, tx_payload, rx, mode)
     }
 
     /// Access the underlying generic ready controller.

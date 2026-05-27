@@ -9,7 +9,9 @@
 //! from hardware faults in diagnostic output.
 //!
 //! Strategy: `dma_read` — a non-blocking DMA kick-off — transitions the
-//! internal controller state to `DmaInFlight` and returns `Ok(())`.  Any
+//! internal controller state to `DmaInFlight` and returns `Ok(())`.  In this
+//! QEMU test we use a debug-only state hook instead of kicking hardware DMA,
+//! because QEMU may not complete or return from the DMA kick path.  Any
 //! subsequent call to `transceive_user` or `dma_read` must find the state
 //! non-ready and immediately return `Err(SmcError::ControllerNotReady)`.
 //!
@@ -30,10 +32,12 @@
 #![no_main]
 
 use ast10x0_peripherals::smc::{
-    ChipSelect, FlashConfig, FmcUninit, SmcConfig, SmcController, SmcError, SmcTopology, TransferMode,
+    ChipSelect, FlashConfig, FmcUninit, SmcConfig, SmcController, SmcError, SmcTopology,
+    TransferMode,
 };
-use cortex_m_semihosting::debug::{EXIT_FAILURE, EXIT_SUCCESS, exit};
-use target_common::{TargetInterface, declare_target};
+use console_backend::console_backend_write_all;
+use cortex_m_semihosting::debug::{exit, EXIT_FAILURE, EXIT_SUCCESS};
+use target_common::{declare_target, TargetInterface};
 use {console_backend as _, entry as _};
 
 pub struct Target {}
@@ -46,11 +50,6 @@ const FLASH_CFG: FlashConfig = FlashConfig {
     spi_clock_mhz: 25,
 };
 
-/// DRAM address used to satisfy `validate_dma_read` alignment requirements.
-///
-/// Must be 4-byte aligned and fall within the hardware DMA_DRAM_MASK
-/// (`0x000BFFFC`).  `0x0008_0000` is the value used by the controller unit
-/// tests for the same purpose.
 const DMA_DRAM_ADDR: usize = 0x0008_0000;
 
 fn run_error_granularity_test() -> Result<(), SmcError> {
@@ -71,12 +70,8 @@ fn run_error_granularity_test() -> Result<(), SmcError> {
         return Err(SmcError::HardwareError);
     }
 
-    // --- 2. DMA kick-off: transitions state → DmaInFlight ---
-    //
-    // `dma_read` writes DMA registers and marks state DmaInFlight.  QEMU does
-    // not model DMA completion, so the controller stays non-ready for the
-    // remainder of this test — which is exactly what we need.
-    fmc.dma_read(ChipSelect::Cs0, 0, DMA_DRAM_ADDR, 256)?;
+    // --- 2. Force DmaInFlight without kicking QEMU DMA ---
+    fmc.test_force_dma_in_flight();
 
     // Controller should no longer report Ready.
     if fmc.is_ready() {
@@ -107,7 +102,12 @@ fn run_error_granularity_test() -> Result<(), SmcError> {
     //
     // State is checked before arg validation, so even a bad DRAM address
     // should yield ControllerNotReady, not InvalidCapacity.
-    match fmc.dma_read(ChipSelect::Cs0, 0, 0x1000_0000 /* outside DMA mask */, 256) {
+    match fmc.dma_read(
+        ChipSelect::Cs0,
+        0,
+        0x1000_0000, /* outside DMA mask */
+        256,
+    ) {
         Err(SmcError::ControllerNotReady) => {}
         other => {
             let _ = other;
@@ -147,6 +147,12 @@ impl TargetInterface for Target {
             Ok(()) => EXIT_SUCCESS,
             Err(_) => EXIT_FAILURE,
         };
+        let sentinel: &[u8] = if exit_status == EXIT_SUCCESS {
+            b"TEST_RESULT:PASS\n"
+        } else {
+            b"TEST_RESULT:FAIL\n"
+        };
+        let _ = console_backend_write_all(sentinel);
         exit(exit_status);
         #[expect(clippy::empty_loop)]
         loop {}

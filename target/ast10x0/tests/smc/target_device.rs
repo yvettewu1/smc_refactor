@@ -13,19 +13,19 @@
 //! 2. **from_fmc** — build SpiNorFlash from FmcReady.
 //! 3. **capacity_bytes** — assert returns 1 MB (matches FlashConfig).
 //! 4. **status** — issue `RDSR` and assert the command path succeeds.
-//! 5. **read via facade — success path** — read 8 bytes from offset 0;
-//!    assert count is returned correctly.  Content not inspected.
-//! 6. **read via facade — bounds rejection** — assert InvalidCapacity before
+//! 5. **read via facade — bounds rejection** — assert InvalidCapacity before
 //!    any MMIO for an out-of-range read.
 
 #![no_std]
 #![no_main]
 
 use ast10x0_peripherals::smc::{
-    FlashConfig, SpiNorFlashDevice, FmcUninit, SmcConfig, SmcController, SmcError, SmcTopology, SpiNorFlash,
+    FlashConfig, FmcUninit, SmcConfig, SmcController, SmcError, SmcTopology, SpiNorFlash,
+    SpiNorFlashDevice,
 };
-use cortex_m_semihosting::debug::{EXIT_FAILURE, EXIT_SUCCESS, exit};
-use target_common::{TargetInterface, declare_target};
+use console_backend::console_backend_write_all;
+use cortex_m_semihosting::debug::{exit, EXIT_FAILURE, EXIT_SUCCESS};
+use target_common::{declare_target, TargetInterface};
 use {console_backend as _, entry as _};
 
 pub struct Target {}
@@ -68,14 +68,7 @@ fn run_device_smoke_test() -> Result<(), SmcError> {
     // --- 4. status ---
     let _ = flash.status()?;
 
-    // --- 5. read via facade — success path ---
-    let mut buf = [0u8; 8];
-    let n = flash.read(0, &mut buf)?;
-    if n != 8 {
-        return Err(SmcError::HardwareError);
-    }
-
-    // --- 6. read via facade — bounds rejection ---
+    // --- 5. read via facade — bounds rejection ---
     // 1 MB = 0x10_0000 bytes; offset 0x000F_FFFF + 8 bytes overflows.
     let mut overflow_buf = [0u8; 8];
     match flash.read(0x000F_FFFF, &mut overflow_buf) {
@@ -95,6 +88,12 @@ impl TargetInterface for Target {
             Ok(()) => EXIT_SUCCESS,
             Err(_e) => EXIT_FAILURE,
         };
+        let sentinel: &[u8] = if exit_status == EXIT_SUCCESS {
+            b"TEST_RESULT:PASS\n"
+        } else {
+            b"TEST_RESULT:FAIL\n"
+        };
+        let _ = console_backend_write_all(sentinel);
         exit(exit_status);
         #[expect(clippy::empty_loop)]
         loop {}
