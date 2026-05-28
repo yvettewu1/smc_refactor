@@ -156,6 +156,10 @@ impl SmcRegisters {
     }
 
     /// FMC030: CS0 segment register (memory mapping)
+    pub fn read_cs0_segment(&self) -> u32 {
+        self.regs().fmc030().read().bits()
+    }
+
     pub fn write_cs0_segment(&self, value: u32) {
         self.regs().fmc030().write(|w| unsafe { w.bits(value) });
     }

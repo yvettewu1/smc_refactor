@@ -11,11 +11,11 @@
     clippy::unimplemented
 )]
 
-use ast10x0_board::{Ast10x0BoardDescriptor, SpimWiringError, apply_spim_wiring};
+use ast10x0_board::{apply_spim_wiring, Ast10x0BoardDescriptor, SpimWiringError};
 use ast10x0_peripherals::scu::ScuRegisters;
 use ast10x0_peripherals::smc::{
-    ChipSelect, FlashConfig, FmcReady, FmcUninit, SmcConfig, SmcController, SmcError, SmcTopology, SpiNorFlash,
-    SpiNorFlashDevice, SpiReady, SpiUninit,
+    ChipSelect, FlashConfig, FmcReady, FmcUninit, SmcConfig, SmcController, SmcError, SmcTopology,
+    SpiNorFlash, SpiNorFlashDevice, SpiReady, SpiUninit,
 };
 
 /// Re-export so test binaries can name the route key without taking a
@@ -189,9 +189,12 @@ impl Ast10x0FlashBackend {
     pub fn new_with_descriptor(
         descriptor: Ast10x0BoardDescriptor,
     ) -> Result<Self, BackendInitError> {
+        pw_log::info!("dbg backend: new_with_descriptor enter");
         let cs0_cfg = descriptor.cs0.ok_or(BackendInitError::MissingCs0Config)?;
         let cs1_cfg = descriptor.cs1;
 
+        pw_log::info!("dbg backend: descriptor cs configs ok");
+        pw_log::info!("dbg backend: monitor/wiring start");
         let monitor = match (descriptor.controller, descriptor.spim_wiring.as_ref()) {
             (SmcController::Fmc, None) => None,
             (SmcController::Fmc, Some(_)) => {
@@ -212,7 +215,9 @@ impl Ast10x0FlashBackend {
             }
         };
 
+        pw_log::info!("dbg backend: monitor/wiring done");
         let controller = build_smc_controller(descriptor.controller, cs0_cfg, cs1_cfg)?;
+        pw_log::info!("dbg backend: build_smc_controller done");
         Ok(Self {
             controller,
             cs0_cfg,
@@ -233,6 +238,7 @@ impl Ast10x0FlashBackend {
     pub fn new_with_pre_wired_descriptor(
         descriptor: Ast10x0BoardDescriptor,
     ) -> Result<Self, BackendInitError> {
+        pw_log::info!("dbg backend: new_with_descriptor enter");
         let cs0_cfg = descriptor.cs0.ok_or(BackendInitError::MissingCs0Config)?;
         let cs1_cfg = descriptor.cs1;
 
@@ -247,7 +253,9 @@ impl Ast10x0FlashBackend {
             (_, Some(_)) => {}
         }
 
+        pw_log::info!("dbg backend: monitor/wiring done");
         let controller = build_smc_controller(descriptor.controller, cs0_cfg, cs1_cfg)?;
+        pw_log::info!("dbg backend: build_smc_controller done");
         Ok(Self {
             controller,
             cs0_cfg,
@@ -269,7 +277,7 @@ impl Ast10x0FlashBackend {
     }
 
     /// Look up the per-CS flash configuration. Returns `InvalidOperation`
-    /// when the requested CS slot was not populated at construction time —
+    /// when the requested CS slot was not populated at construction time ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â
     /// this is the last-line guard against a misrouted channel.
     fn cfg_for(&self, cs: ChipSelect) -> Result<FlashConfig, BackendError> {
         match cs {
@@ -293,33 +301,65 @@ impl Ast10x0FlashBackend {
     }
 }
 
+fn should_init_normal_read(controller: SmcController, cs0_cfg: FlashConfig) -> bool {
+    // QEMU FMC flash models hang on the calibration/mapped-read path used by
+    // spi_nor_read_init(). The virtual FMC descriptors use 1 MiB CS geometry;
+    // physical board descriptors are larger and still need read-mode setup.
+    !(controller == SmcController::Fmc && cs0_cfg.capacity_mb <= 1)
+}
 fn build_smc_controller(
     controller: SmcController,
     cs0_cfg: FlashConfig,
     cs1_cfg: Option<FlashConfig>,
 ) -> Result<ControllerBackend, SmcError> {
+    let init_normal_read = should_init_normal_read(controller, cs0_cfg);
+
     let config = SmcConfig {
         controller_id: controller,
         cs0: Some(cs0_cfg),
         cs1: cs1_cfg,
         dma_enabled: false,
-        // Gates `enable_dma_irq()` inside `Smc::dma_read` (controller.rs:217).
-        // Required for the IRQ-driven park/retry path in the runtime.
-        enable_interrupts: true,
+        enable_interrupts: false,
         topology: SmcTopology::BootSpi { master_idx: 0 }, // TODO: Phase 2 refine per controller
     };
 
     match controller {
         SmcController::Fmc => {
+            pw_log::info!("dbg backend: fmc branch enter");
             // SAFETY: backend owns the FMC controller for the process lifetime.
             let uninit = unsafe { FmcUninit::new(config) }?;
-            let fmc = uninit.init()?;
+            pw_log::info!("dbg backend: fmc uninit created");
+            let mut fmc = uninit.init()?;
+            pw_log::info!("dbg backend: fmc init done");
+            if init_normal_read {
+                pw_log::info!("dbg backend: fmc read init cs0 start");
+                fmc.spi_nor_read_init(ChipSelect::Cs0)?;
+                pw_log::info!("dbg backend: fmc read init cs0 done");
+                if cs1_cfg.is_some() {
+                    pw_log::info!("dbg backend: fmc read init cs1 start");
+                    fmc.spi_nor_read_init(ChipSelect::Cs1)?;
+                    pw_log::info!("dbg backend: fmc read init cs1 done");
+                }
+            } else {
+                pw_log::info!("dbg backend: fmc read init skipped");
+            }
             Ok(ControllerBackend::Fmc(fmc))
         }
         SmcController::Spi1 | SmcController::Spi2 => {
+            pw_log::info!("dbg backend: spi branch enter");
             // SAFETY: backend owns the SPI controller for the process lifetime.
             let uninit = unsafe { SpiUninit::new(controller, config) }?;
-            let spi = uninit.init()?;
+            pw_log::info!("dbg backend: spi uninit created");
+            let mut spi = uninit.init()?;
+            pw_log::info!("dbg backend: spi init done");
+            pw_log::info!("dbg backend: spi read init cs0 start");
+            spi.spi_nor_read_init(ChipSelect::Cs0)?;
+            pw_log::info!("dbg backend: spi read init cs0 done");
+            if cs1_cfg.is_some() {
+                pw_log::info!("dbg backend: spi read init cs1 start");
+                spi.spi_nor_read_init(ChipSelect::Cs1)?;
+                pw_log::info!("dbg backend: spi read init cs1 done");
+            }
             Ok(ControllerBackend::Spi(spi))
         }
     }
@@ -355,8 +395,8 @@ impl FlashBackend for Ast10x0FlashBackend {
         let id = self.with_flash(key, |flash| flash.jedec_id())?;
         Ok(id != [0x00, 0x00, 0x00] && id != [0xFF, 0xFF, 0xFF])
     }
-    // this will use default Memory read mode 
-    // It can read data directly from AHB bus or Use DMA Read in Memory Mode 
+    // this will use default Memory read mode
+    // It can read data directly from AHB bus or Use DMA Read in Memory Mode
     fn read(
         &mut self,
         key: ChipSelect,
@@ -406,12 +446,7 @@ impl FlashBackend for Ast10x0FlashBackend {
         Err(BackendError::WouldBlock)
     }
 
-    fn write(
-        &mut self,
-        key: ChipSelect,
-        address: u32,
-        data: &[u8],
-    ) -> Result<usize, BackendError> {
+    fn write(&mut self, key: ChipSelect, address: u32, data: &[u8]) -> Result<usize, BackendError> {
         if data.is_empty() {
             return Ok(0);
         }
@@ -425,12 +460,7 @@ impl FlashBackend for Ast10x0FlashBackend {
         self.with_flash(key, |flash| flash.program(address, data))
     }
 
-    fn erase(
-        &mut self,
-        key: ChipSelect,
-        address: u32,
-        length: u32,
-    ) -> Result<(), BackendError> {
+    fn erase(&mut self, key: ChipSelect, address: u32, length: u32) -> Result<(), BackendError> {
         if length == 0 {
             return Ok(());
         }

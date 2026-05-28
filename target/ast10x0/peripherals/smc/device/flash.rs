@@ -388,41 +388,17 @@ impl<'a> SpiNorFlash<'a> {
         self.command_profile
     }
 
-    fn cs_config_for(&self, cs: ChipSelect) -> Result<FlashConfig, SmcError> {
-        match &self.backend {
-            FlashBackend::Fmc(fmc) => fmc.cs_config(cs),
-            FlashBackend::Spi(spi) => spi.cs_config(cs),
-        }
-    }
 
-    /// Translate a device-local offset into the controller-window address that
-    /// the segment-routed read path expects.
+    /// Validate a device-local offset before handing it to the controller.
     ///
-    /// Read traffic flows through the AHB flash window; the controller's
-    /// segment registers map `[CS0_BASE, CS0_BASE+CS0_SIZE)` to CS0 and
-    /// `[CS0_BASE+CS0_SIZE, CS0_BASE+TOTAL)` to CS1. The user-mode command
-    /// path (`transceive_user`) is *not* segment-routed — its on-wire address
-    /// bytes are already device-local from the chip's perspective — so this
-    /// translation is read-only.
+    /// `FmcReady::read` / `SpiReady::read` already select the per-CS AHB
+    /// window from the chip-select argument, so offsets stay CS-local here.
     fn device_to_controller_offset(&self, device_offset: u32) -> Result<u32, SmcError> {
         let cs_cap = self.capacity_bytes()?;
         if (device_offset as usize) >= cs_cap {
             return Err(SmcError::InvalidCapacity);
         }
-        let base: u32 = match self.cs {
-            ChipSelect::Cs0 => 0,
-            ChipSelect::Cs1 => match self.cs_config_for(ChipSelect::Cs1) {
-                Ok(cfg) => u32::try_from(
-                    (cfg.capacity_mb as usize)
-                        .checked_mul(1024 * 1024)
-                        .ok_or(SmcError::InvalidCapacity)?,
-                )
-                .map_err(|_| SmcError::InvalidCapacity)?,
-                Err(SmcError::InvalidChipSelect) => 0,
-                Err(e) => return Err(e),
-            },
-        };
-        base.checked_add(device_offset).ok_or(SmcError::InvalidCapacity)
+        Ok(device_offset)
     }
 
     fn validate_range(&self, offset: u32, len: usize) -> Result<(), SmcError> {

@@ -3,6 +3,7 @@
 
 //! Generic SMC controller implementation
 
+use core::cell::UnsafeCell;
 use core::marker::PhantomData;
 
 use crate::smc::helpers::{
@@ -38,6 +39,14 @@ const DMA_STATUS_RELEVANT_BITS: u32 = (1 << 11) | (1 << 10) | (1 << 9);
 /// frequency divisor and other config bits across per-phase ctrl writes.
 const SPI_CTRL_IO_MODE_MASK: u32 = !0x7000_0000;
 const SPI_CALIB_LEN: usize = 0x400;
+
+struct CalibrationScratch(UnsafeCell<[u8; SPI_CALIB_LEN]>);
+
+// Calibration runs during controller initialization with exclusive controller
+// ownership, so this scratch buffer is not accessed concurrently.
+unsafe impl Sync for CalibrationScratch {}
+
+static CALIBRATION_SCRATCH: CalibrationScratch = CalibrationScratch(UnsafeCell::new([0; SPI_CALIB_LEN]));
 
 const fn spi_nor_qread_cmd_for_capacity(capacity_bytes: usize) -> u32 {
     if capacity_bytes > SPI_NOR_4B_READ_THRESHOLD_BYTES {
@@ -608,7 +617,7 @@ impl Smc<Ready> {
         let ctrl_val = self.regs.read_cs_ctrl(cs) & (!SPI_CTRL_FREQ_MASK);
         self.regs.write_cs_ctrl(cs, ctrl_val);
 
-        let mut check_buf = [0u8; SPI_CALIB_LEN];
+        let check_buf = unsafe { &mut *CALIBRATION_SCRATCH.0.get() };
         let window = self.flash_window_base[cs_idx] as *const u8;
         // TODO: configure timing_calibration_start_offset beside be???
         let timing_offset = 0x0;
@@ -617,7 +626,7 @@ impl Smc<Ready> {
             core::ptr::copy_nonoverlapping(flash_ptr, check_buf.as_mut_ptr(), SPI_CALIB_LEN);
         }
 
-        if !spi_calibration_enable(&check_buf)? {
+        if !spi_calibration_enable(&check_buf[..])? {
             return self.configure_timing(cs, cs_cfg.spi_clock_mhz);
         }
 

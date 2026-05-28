@@ -19,7 +19,9 @@
 
 use crate::smc::controller::{ReadySmc, UninitSmc};
 use crate::smc::interrupts::SmcInterrupt;
-use crate::smc::types::{ChipSelect, FlashConfig, SmcConfig, SmcController, SmcError, TransferMode};
+use crate::smc::types::{
+    ChipSelect, FlashConfig, SmcConfig, SmcController, SmcError, TransferMode,
+};
 
 /// SPI handle before hardware initialization.
 pub struct SpiUninit {
@@ -50,15 +52,18 @@ impl SpiUninit {
     /// Construct an uninitialized SPI controller for SPI1 or SPI2.
     ///
     /// # Topology Requirements
-    /// 
+    ///
     /// The SPI wrapper is for HostSpi and NormalSpi topologies only.
     /// BootSpi (FMC) should use the generic Smc<FmcRegisterBackend> directly.
     ///
     /// # Safety
     /// Caller must ensure unique ownership of the selected SPI hardware block.
-    pub unsafe fn new(controller_id: SmcController, mut config: SmcConfig) -> Result<Self, SmcError> {
+    pub unsafe fn new(
+        controller_id: SmcController,
+        mut config: SmcConfig,
+    ) -> Result<Self, SmcError> {
         // Phase 3: Topology-aware SPI construction check.
-        // 
+        //
         // The SPI wrapper is specialized for HostSpi and NormalSpi topologies.
         // FMC (BootSpi topology) uses the generic controller with FmcRegisterBackend.
         // This check enforces that constraint at construction time.
@@ -88,7 +93,13 @@ impl SpiReady {
     }
 
     /// Initiate a DMA read operation.
-    pub fn dma_read(&mut self, cs: ChipSelect, flash_offset: u32, dram_addr: usize, len: u32) -> Result<(), SmcError> {
+    pub fn dma_read(
+        &mut self,
+        cs: ChipSelect,
+        flash_offset: u32,
+        dram_addr: usize,
+        len: u32,
+    ) -> Result<(), SmcError> {
         self.inner.dma_read(cs, flash_offset, dram_addr, len)
     }
 
@@ -115,6 +126,11 @@ impl SpiReady {
     /// Check if SPI controller is ready for operations.
     pub fn is_ready(&self) -> bool {
         self.inner.is_ready()
+    }
+
+    /// Program memory-mapped SPI NOR read mode for the selected chip select.
+    pub fn spi_nor_read_init(&mut self, cs: ChipSelect) -> Result<(), SmcError> {
+        self.inner.spi_nor_read_init(cs)
     }
 
     /// Return configured flash capacity in bytes.
@@ -155,7 +171,8 @@ impl SpiReady {
         rx: &mut [u8],
         mode: TransferMode,
     ) -> Result<(), SmcError> {
-        self.inner.transceive_user(ChipSelect::Cs0, cmd, tx_payload, rx, mode)
+        self.inner
+            .transceive_user(ChipSelect::Cs0, cmd, tx_payload, rx, mode)
     }
 
     /// Access the underlying generic ready controller.

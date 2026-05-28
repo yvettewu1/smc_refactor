@@ -320,7 +320,7 @@ impl Ast10x0BoardDescriptor {
             spi_clock_mhz: 50,
         };
         let cfg1 = FlashConfig {
-            capacity_mb: 32,
+            capacity_mb: 64,
             page_size: 256,
             sector_size: 4096,
             block_size: 65536,

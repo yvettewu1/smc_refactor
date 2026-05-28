@@ -94,6 +94,11 @@ impl FmcReady {
         self.inner.is_ready()
     }
 
+    /// Program memory-mapped SPI NOR read mode for the selected chip select.
+    pub fn spi_nor_read_init(&mut self, cs: ChipSelect) -> Result<(), SmcError> {
+        self.inner.spi_nor_read_init(cs)
+    }
+
     #[doc(hidden)]
     pub fn test_force_dma_in_flight(&mut self) {
         self.inner.test_force_dma_in_flight();
