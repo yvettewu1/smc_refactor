@@ -13,8 +13,7 @@
 use ast10x0_board::Ast10x0BoardDescriptor;
 use ast10x0_peripherals::scu::ScuRegisters;
 use console_backend::console_backend_write_all;
-use flash_api::backend::{BackendError, FlashBackend};
-use flash_backend::{Backend, Cs};
+use flash_backend::{Backend, BackendError, Cs};
 use target_common::{declare_target, TargetInterface};
 use {console_backend as _, entry as _};
 
