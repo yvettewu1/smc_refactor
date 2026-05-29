@@ -8,8 +8,7 @@ from pathlib import Path
 from typing import Iterable, Sequence, TextIO
 
 from pw_cli.plural import plural
-from pw_presubmit.presubmit_context import PresubmitContext, PresubmitFailure
-from pw_presubmit.presubmit import filter_paths
+from pw_presubmit.presubmit import PresubmitContext, PresubmitFailure, filter_paths
 
 _LOG = logging.getLogger("license")
 
@@ -51,11 +50,13 @@ _EXCLUDE_FROM_LICENSE_CHECK: Sequence[str] = (
     # keep-sorted: start
     r"\.bin$",
     r"\.csv$",
+    r"\.der$",
     r"\.elf$",
     r"\.gif$",
     r"\.ico$",
     r"\.jpg$",
     r"\.json$",
+    r"\.pem$",
     r"\.png$",
     r"\.svg$",
     r"\.vsix$",
@@ -73,6 +74,10 @@ _EXCLUDE_FROM_LICENSE_CHECK: Sequence[str] = (
     r"\.pb\.c$",
     r"\.pb\.h$",
     r"\_pb2.pyi?$",
+    # keep-sorted: end
+    # Generated files
+    # keep-sorted: start
+    r"\btarget/earlgrey/registers/.*",
     # keep-sorted: end
     # Generated third-party files
     # keep-sorted: start

@@ -1,0 +1,72 @@
+# Licensed under the Apache-2.0 license
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_rust//rust:defs.bzl", "rust_library")
+load("//target/ast10x0:defs.bzl", "TARGET_COMPATIBLE_WITH")
+
+package(default_visibility = ["//visibility:public"])
+
+rust_library(
+    name = "peripherals",
+    srcs = [
+        "i2c/constants.rs",
+        "i2c/controller.rs",
+        "i2c/error.rs",
+        "i2c/global.rs",
+        "i2c/hal_impl.rs",
+        "i2c/master.rs",
+        "i2c/mod.rs",
+        "i2c/recovery.rs",
+        "i2c/slave.rs",
+        "i2c/target_adapter.rs",
+        "i2c/timing.rs",
+        "i2c/transfer.rs",
+        "i2c/types.rs",
+        "lib.rs",
+        "scu/clock.rs",
+        "scu/mod.rs",
+        "scu/pinctrl.rs",
+        "scu/registers.rs",
+        "scu/reset.rs",
+        "scu/routing.rs",
+        "scu/status.rs",
+        "scu/types.rs",
+        "spimonitor/mod.rs",
+        "spimonitor/registers.rs",
+        "spimonitor/types.rs",
+        "spimonitor/traits.rs",
+        "spimonitor/policy.rs",
+        "spimonitor/profile.rs",
+        "spimonitor/controller.rs",
+        "uart/mod.rs",
+        "smc/mod.rs",
+        "smc/registers.rs",
+        "smc/types.rs",
+        "smc/helpers.rs",
+        "smc/controller.rs",
+        "smc/fmc.rs",
+        "smc/spi.rs",
+        "smc/interrupts.rs",
+        "smc/device/mod.rs",
+        "smc/device/block_device.rs",
+        "smc/device/flash.rs",
+    ],
+    crate_name = "ast10x0_peripherals",
+    crate_root = "lib.rs",
+    edition = "2024",
+    target_compatible_with = TARGET_COMPATIBLE_WITH,
+    deps = [
+        "@ast1060_pac",
+        "@rust_crates//:bitflags",
+        "@rust_crates//:embedded-hal",
+        "@rust_crates//:embedded-hal-nb",
+        "@rust_crates//:embedded-storage",
+        "@rust_crates//:embedded-io",
+        "@rust_crates//:nb",
+        "@pigweed//pw_log/rust:pw_log",
+    ],
+    proc_macro_deps = [
+        "@rust_crates//:paste",
+    ],
+)
+

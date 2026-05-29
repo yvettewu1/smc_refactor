@@ -1,0 +1,472 @@
+// Licensed under the Apache-2.0 license
+// SPDX-License-Identifier: Apache-2.0
+
+#![no_std]
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unreachable,
+    clippy::todo,
+    clippy::unimplemented
+)]
+use ast10x0_peripherals::scu::{
+    pinctrl::PINCTRL_FMC_QUAD, ClockRegisterHalf, PinctrlPin, ScuRegisterHalf, ScuRegisters,
+};
+use ast10x0_peripherals::smc::{FlashConfig, SmcConfig, SmcController, SmcTopology};
+use ast10x0_peripherals::spimonitor::registers::{SpiMonitorController, SpiMonitorRegisters};
+use ast10x0_peripherals::spimonitor::LockedSpiMonitor;
+use ast10x0_peripherals::spimonitor::MonitorPolicy;
+
+pub mod monitor;
+pub mod spim_wiring;
+
+pub use monitor::Ast1060Monitor;
+pub use spim_wiring::{apply_spim_wiring, presets, SpimWiring, SpimWiringError};
+
+/// Policy for handling unknown JEDEC IDs at board-integration level.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UnknownJedecPolicy {
+    /// Reject unknown devices and fail closed.
+    StrictReject,
+    /// Allow integration-layer fallback using configured geometry.
+    ConservativeConfigured,
+}
+
+/// Board-level descriptor for AST10x0 SMC flash topology.
+///
+/// Not `Eq`/`PartialEq` because the embedded `MonitorPolicy` is not (yet);
+/// callers compare individual fields if they need equality.
+#[derive(Clone, Debug)]
+pub struct Ast10x0BoardDescriptor {
+    pub controller: SmcController,
+    pub cs0: Option<FlashConfig>,
+    pub cs1: Option<FlashConfig>,
+    pub unknown_jedec_policy: UnknownJedecPolicy,
+    /// SPIM routing for SPI controllers. Must be `None` for FMC and
+    /// `Some(_)` for Spi1/Spi2.
+    pub spim_wiring: Option<SpimWiring>,
+    /// SPIPF policy programmed and locked when `spim_wiring` is `Some(_)`.
+    /// Ignored for FMC descriptors.
+    pub monitor_policy: MonitorPolicy,
+    /// Pin control groups to apply before SPIM wiring during board init.
+    /// Applied in order via `ScuRegisters::apply_pinctrl_group()` before
+    /// SPIM routing is programmed and locked.
+    pub pinctrl_groups: &'static [&'static [PinctrlPin]],
+}
+
+impl Default for Ast10x0BoardDescriptor {
+    fn default() -> Self {
+        Self::ast10x0_qemu_default()
+    }
+}
+
+/// Runtime board object that executes common AST10x0 initialization steps.
+pub struct Ast10x0Board {
+    descriptor: Ast10x0BoardDescriptor,
+}
+
+impl Ast10x0Board {
+    /// Create a board runtime object from board metadata.
+    #[must_use]
+    pub const fn new(descriptor: Ast10x0BoardDescriptor) -> Self {
+        Self { descriptor }
+    }
+
+    /// Initialize board-level I2C state.
+    ///
+    /// This performs the platform-level I2C initialization sequence:
+    /// 1. Apply pinctrl groups.
+    /// 2. Enable the I2C clock via SCU.
+    /// 3. Assert and deassert the I2C/SMBus controller reset.
+    /// 4. Configure I2C global registers.
+    ///
+    /// # Safety
+    /// Must be called only once during board initialization. The caller must
+    /// ensure no concurrent SCU or I2C accesses occur during this sequence.
+    pub unsafe fn init(&self) {
+        // Unlock SCU once before the sequence of writes.
+        let scu = unsafe { ScuRegisters::new_global_unlocked() };
+
+        for group in self.descriptor.pinctrl_groups {
+            scu.apply_pinctrl_group(group);
+        }
+
+        // Enable I2C clock (Group 0, bit 2).
+        scu.ungate_clock_mask(ClockRegisterHalf::Lower, 1 << 2);
+
+        // Assert then deassert I2C reset (Upper half, bit 2).
+        scu.assert_reset_mask(ScuRegisterHalf::Upper, 1 << 2);
+        delay_us(1000);
+
+        scu.deassert_reset_mask(ScuRegisterHalf::Upper, 1 << 2);
+        delay_us(1000);
+
+        unsafe { ast10x0_peripherals::i2c::init_i2c_global() };
+    }
+}
+
+impl Ast10x0BoardDescriptor {
+    /// Convert descriptor data into a driver-facing SMC controller config.
+    pub fn smc_config(&self) -> SmcConfig {
+        // Map controller role to topology (Phase 2: source topology from board descriptors)
+        let topology = match self.controller {
+            SmcController::Fmc => SmcTopology::BootSpi { master_idx: 0 },
+            SmcController::Spi1 => SmcTopology::HostSpi { master_idx: 0 },
+            SmcController::Spi2 => SmcTopology::NormalSpi { master_idx: 2 },
+        };
+
+        SmcConfig {
+            controller_id: self.controller,
+            cs0: self.cs0,
+            cs1: self.cs1,
+            dma_enabled: false,
+            enable_interrupts: false,
+            topology,
+        }
+    }
+
+    /// Initialize board: apply pinctrl groups, then SPIM wiring and policy lock.
+    ///
+    /// This is a one-way operation: the SPIPF policy lock is irreversible until
+    /// reset. Callers should pass vetted presets to avoid bricking the SPI bus.
+    ///
+    /// # Safety
+    /// Caller must hold exclusive access to the SCU register block and to the
+    /// target SPIPF block for the lifetime of the operation.
+    ///
+    /// # Errors
+    /// Returns error if controller/source routing validation fails or if the
+    /// policy is invalid.
+    pub unsafe fn init_board(
+        &self,
+        scu: &ScuRegisters,
+    ) -> Result<Option<LockedSpiMonitor>, SpimWiringError> {
+        // Step 1: Apply all pinctrl groups in order
+        for group in self.pinctrl_groups {
+            scu.apply_pinctrl_group(group);
+        }
+
+        // Step 2: Apply SPIM wiring if present, lock policy
+        match &self.spim_wiring {
+            Some(wiring) => {
+                // SAFETY: Caller upholds the exclusivity requirements
+                unsafe {
+                    apply_spim_wiring(scu, self.controller, *wiring, &self.monitor_policy).map(Some)
+                }
+            }
+            None => {
+                // FMC path: no SPIM routing or policy lock
+                Ok(None)
+            }
+        }
+    }
+
+    /// Default descriptor for the AST10x0 QEMU setup (single 1 MiB flash on
+    /// CS0 of the FMC controller). FMC has no SPIM path.
+    pub fn ast10x0_qemu_default() -> Self {
+        Self {
+            controller: SmcController::Fmc,
+            cs0: Some(FlashConfig {
+                capacity_mb: 1,
+                page_size: 256,
+                sector_size: 4096,
+                block_size: 65536,
+                spi_clock_mhz: 25,
+            }),
+            cs1: None,
+            unknown_jedec_policy: UnknownJedecPolicy::StrictReject,
+            spim_wiring: None,
+            monitor_policy: MonitorPolicy::empty(),
+            pinctrl_groups: &[],
+        }
+    }
+
+    /// Default descriptor for SPI1 (aspeed-rust SPI0) wired through SPIM0
+    /// with the BMC default opcode allow-list policy.
+    pub fn ast10x0_qemu_default_spi1() -> Self {
+        Self {
+            controller: SmcController::Spi1,
+            cs0: Some(FlashConfig::winbond_w25q256()),
+            cs1: None,
+            unknown_jedec_policy: UnknownJedecPolicy::StrictReject,
+            spim_wiring: Some(SpimWiring::default_spi1_via_spim0()),
+            monitor_policy: presets::bmc_default_policy(),
+            pinctrl_groups: &[],
+        }
+    }
+
+    /// Default descriptor for SPI2 (aspeed-rust SPI1) wired through SPIM2
+    /// with the BMC default opcode allow-list policy.
+    pub fn ast10x0_qemu_default_spi2() -> Self {
+        Self {
+            controller: SmcController::Spi2,
+            cs0: Some(FlashConfig::winbond_w25q256()),
+            cs1: None,
+            unknown_jedec_policy: UnknownJedecPolicy::StrictReject,
+            spim_wiring: Some(SpimWiring::default_spi2_via_spim2()),
+            monitor_policy: presets::bmc_default_policy(),
+            pinctrl_groups: &[],
+        }
+    }
+
+    /// Dual-CS variant of the FMC default. CS1 mirrors CS0's geometry; on
+    /// QEMU CS1 is unconnected so JEDEC reads return `0xFF` and writes
+    /// surface as `IoError`. The descriptor itself is environment-agnostic
+    /// clients keyed off CS1 see a coherent device whose physical state
+    /// depends on the board.
+    pub fn ast10x0_qemu_default_dual_cs() -> Self {
+        let cs0 = FlashConfig {
+            capacity_mb: 1,
+            page_size: 256,
+            sector_size: 4096,
+            block_size: 65536,
+            spi_clock_mhz: 25,
+        };
+        Self {
+            controller: SmcController::Fmc,
+            cs0: Some(cs0),
+            cs1: Some(cs0),
+            unknown_jedec_policy: UnknownJedecPolicy::StrictReject,
+            spim_wiring: None,
+            monitor_policy: MonitorPolicy::empty(),
+            pinctrl_groups: &[],
+        }
+    }
+
+    /// Dual-CS variant of the SPI1 default. Both CSes use the W25Q256
+    /// geometry; the SPIPF policy and lock are unchanged.
+    pub fn ast10x0_qemu_default_spi1_dual_cs() -> Self {
+        Self {
+            controller: SmcController::Spi1,
+            cs0: Some(FlashConfig::winbond_w25q256()),
+            cs1: Some(FlashConfig::winbond_w25q256()),
+            unknown_jedec_policy: UnknownJedecPolicy::StrictReject,
+            spim_wiring: Some(SpimWiring::default_spi1_via_spim0()),
+            monitor_policy: presets::bmc_default_policy(),
+            pinctrl_groups: &[],
+        }
+    }
+
+    /// Dual-CS variant of the SPI2 default.
+    pub fn ast10x0_qemu_default_spi2_dual_cs() -> Self {
+        Self {
+            controller: SmcController::Spi2,
+            cs0: Some(FlashConfig::winbond_w25q256()),
+            cs1: Some(FlashConfig::winbond_w25q256()),
+            unknown_jedec_policy: UnknownJedecPolicy::StrictReject,
+            spim_wiring: Some(SpimWiring::default_spi2_via_spim2()),
+            monitor_policy: presets::bmc_default_policy(),
+            pinctrl_groups: &[],
+        }
+    }
+
+    // -- AST1060 EVB descriptors derived from aspeed-rust ------------------
+    //
+    // The constructors below transcribe the per-controller constants from
+    // `aspeed-rust/src/spi/spitest.rs` (FMC_CONFIG / SPI0_CONFIG /
+    // SPI1_CONFIG plus FMC_CS*_CAPACITY / SPI_CS*_CAPACITY). Mapping
+    // (already documented in `default_spi1_via_spim0` / `_spi2_via_spim2`
+    // above): aspeed `SPI0` = smc-work `Spi1`, aspeed `SPI1` = smc-work
+    // `Spi2`.
+    //
+    // Caveats : read before flashing real silicon:
+    // 1. **Capacity is the test ceiling, not chip read.** SPI controllers
+    //    use 64 MB (`SPI_CS*_CAPACITY = 0x0400_0000`), which sized
+    //    aspeed-rust's tests; the actual EVB part may be smaller. Confirm
+    //    against the schematic / JEDEC ID before trusting `info()`
+    //    capacity. The Macronix MX25L8006E reference at spitest.rs:64 is
+    //    1 MB and is just where page/sector defaults come from : not the
+    //    SPI part.
+    // 2. **Pinctrl is NOT carried.** aspeed-rust applies
+    //    `PINCTRL_FMC_QUAD` / `PINCTRL_SPIM0_QUAD_DEFAULT` /
+    //    `PINCTRL_SPI1_QUAD` / `PINCTRL_SPIM2_PINCTRL0` /
+    //    `PINCTRL_SPIM3_PINCTRL0` / `PINCTRL_SPI2_QUAD` (SCU414/418
+    //    multi-function pin programming) at controller init. Our
+    //    `SpimWiring` only covers SCU0F0 routing. The kernel target's
+    //    `main()` is responsible for the multi-function pin programming
+    //    before any flash server starts.
+    // 3. **Quad pins are committed, quad transfer modes are not wired.**
+    //    Even with quad pinctrl applied externally, OpenPRoT today does
+    //    not program quad-IO into the CS control register (parity-gaps
+    //    D3). AHB reads will run at 1-1-1 regardless of pin width until
+    //    D3 lands.
+    // 4. **`master_idx` / `ctrl_type` are not modeled.** aspeed-rust
+    //    uses these to gate timing-calibration skipping and SPIM
+    //    bracketing (parity-gaps B11). The constructors here pick the
+    //    `_via_spimN` wiring corresponding to aspeed-rust's choice but
+    //    cannot encode the calibration-skip rule.
+    // 5. **Target frequency, not measured bus speed.** aspeed-rust's
+    //    50 MHz target feeds `spi_freq_div`, which picks the closest
+    //    divisor *below* target. With HCLK currently hard-coded to
+    //    200 MHz in OpenPRoT (parity-gaps D7), the actual SCK rate
+    //    will only match silicon when HCLK is also 200 MHz.
+    //
+    // Geometry shared by all three controllers below (Macronix MX25L8006E
+    // and equivalents : see `aspeed-rust/src/spi/spitest.rs:64-65`):
+    //   page_size = 256, sector_size = 4096, block_size = 65536.
+    // Target SCK = 50 MHz (aspeed-rust spitest.rs:87/100/113).
+
+    /// AST1060 EVB FMC: 1 MB CS0 + 1 MB CS1 at 50 MHz target,
+    /// `BootSpi` / `master_idx = 0`.
+    /// Source: `aspeed-rust/src/spi/spitest.rs:79-90`,
+    /// `FMC_CS0_CAPACITY` / `FMC_CS1_CAPACITY` at lines 58-59.
+    pub fn ast1060_evb_fmc_aspeed_rust_derived() -> Self {
+        let cfg = FlashConfig {
+            capacity_mb: 2,
+            page_size: 256,
+            sector_size: 4096,
+            block_size: 65536,
+            spi_clock_mhz: 50,
+        };
+        let cfg1 = FlashConfig {
+            capacity_mb: 64,
+            page_size: 256,
+            sector_size: 4096,
+            block_size: 65536,
+            spi_clock_mhz: 50,
+        };
+        Self {
+            controller: SmcController::Fmc,
+            cs0: Some(cfg),
+            cs1: Some(cfg1),
+            unknown_jedec_policy: UnknownJedecPolicy::StrictReject,
+            spim_wiring: None,
+            monitor_policy: MonitorPolicy::empty(),
+            pinctrl_groups: &[PINCTRL_FMC_QUAD],
+        }
+    }
+
+    /// AST1060 EVB SPI1 (aspeed SPI0): 64 MB CS0 routed through SPIM0,
+    /// 50 MHz target, `HostSpi` / `master_idx = 0`.
+    /// Source: `aspeed-rust/src/spi/spitest.rs:92-103, 60`. Pinctrl
+    /// (`PINCTRL_SPIM0_QUAD_DEFAULT` + `PINCTRL_SPI1_QUAD`) and the
+    /// SCU0F0 = `0x0000_fff0` write at spitest.rs:417 must be programmed
+    /// by the kernel target before any user-space flash server runs.
+    pub fn ast1060_evb_spi1_aspeed_rust_derived() -> Self {
+        let cfg = FlashConfig {
+            capacity_mb: 64,
+            page_size: 256,
+            sector_size: 4096,
+            block_size: 65536,
+            spi_clock_mhz: 50,
+        };
+        Self {
+            controller: SmcController::Spi1,
+            cs0: Some(cfg),
+            cs1: None,
+            unknown_jedec_policy: UnknownJedecPolicy::StrictReject,
+            spim_wiring: Some(SpimWiring::default_spi1_via_spim0()),
+            monitor_policy: presets::bmc_default_policy(),
+            pinctrl_groups: &[],
+        }
+    }
+
+    /// AST1060 EVB SPI2 (aspeed SPI1): 64 MB CS0 + CS1 routed through
+    /// SPIM2, 50 MHz target, `NormalSpi` / `master_idx = 2`.
+    /// Source: `aspeed-rust/src/spi/spitest.rs:105-116, 60-61`. aspeed-rust
+    /// re-routes CS1 through SPIM3 mid-test (spitest.rs:710-714); that
+    /// per-transaction reroute is incompatible with OpenPRoT's lock-once
+    /// SPIPF model (parity-gaps B10). The descriptor here keeps both
+    /// CSes on SPIM2; CS1 access requires a separate descriptor or a
+    /// reworked SPIPF flow. Kernel pinctrl groups required:
+    /// `PINCTRL_SPIM2_PINCTRL0`, `PINCTRL_SPIM3_PINCTRL0`,
+    /// `PINCTRL_SPI2_QUAD`.
+    /// **`timing_calibration_disabled = false` in aspeed-rust** : the
+    /// only controller that enables calibration. Until parity-gaps D9
+    /// lands, this descriptor relies on POR timing.
+    pub fn ast1060_evb_spi2_aspeed_rust_derived() -> Self {
+        let cfg = FlashConfig {
+            capacity_mb: 64,
+            page_size: 256,
+            sector_size: 4096,
+            block_size: 65536,
+            spi_clock_mhz: 50,
+        };
+        Self {
+            controller: SmcController::Spi2,
+            cs0: Some(cfg),
+            cs1: Some(cfg),
+            unknown_jedec_policy: UnknownJedecPolicy::StrictReject,
+            spim_wiring: Some(SpimWiring::default_spi2_via_spim2()),
+            monitor_policy: presets::bmc_default_policy(),
+            pinctrl_groups: &[],
+        }
+    }
+}
+
+/// Runtime board hardware owner and orchestrator.
+///
+/// Owns all hardware register blocks (SCU, SPIPF, etc.) and provides
+/// orchestration interfaces (Monitor, etc.) to boot code and tests.
+///
+/// Tracks region counts in memory (following aspeed-rust pattern):
+///  `read_blocked_region_count`: number of configured read-blocked regions
+///  `write_blocked_region_count`: number of configured write-blocked regions
+///
+/// # Example
+///
+/// ```ignore
+/// let mut board = unsafe { Ast1060Board::init() };
+/// let mut monitor = board.monitor();
+/// monitor.set_mux(MonitorInstance::Spim0, MuxSelect::RotControl)?;
+/// ```
+pub struct Ast1060Board {
+    scu: ScuRegisters,
+    spipf: [SpiMonitorRegisters; 4],
+    read_blocked_region_count: u8,
+    write_blocked_region_count: u8,
+}
+
+impl Ast1060Board {
+    /// Initialize the board with exclusive access to all hardware blocks.
+    ///
+    /// # Safety
+    ///
+    /// Caller must ensure:
+    ///  This is called only once during boot (or once per test phase)
+    ///  No other code holds references to any hardware register blocks
+    ///  This instance maintains exclusive ownership until dropped
+    #[allow(unsafe_op_in_unsafe_fn)]
+    pub unsafe fn init() -> Self {
+        Self {
+            scu: ScuRegisters::new_global(),
+            spipf: [
+                SpiMonitorRegisters::new_for_controller(SpiMonitorController::Spim0),
+                SpiMonitorRegisters::new_for_controller(SpiMonitorController::Spim1),
+                SpiMonitorRegisters::new_for_controller(SpiMonitorController::Spim2),
+                SpiMonitorRegisters::new_for_controller(SpiMonitorController::Spim3),
+            ],
+            read_blocked_region_count: 0,
+            write_blocked_region_count: 0,
+        }
+    }
+
+    /// Get a Monitor orchestrator for SPI security operations.
+    ///
+    /// The Monitor provides a unified interface to:
+    ///  Control external mux (via SCU routing)
+    ///  Manage address privilege filters (via SPIPF)
+    ///  Lock and verify policies
+    ///  Perform resets
+    pub fn monitor(&mut self) -> Ast1060Monitor<'_> {
+        Ast1060Monitor::new(
+            &mut self.scu,
+            &mut self.spipf,
+            self.read_blocked_region_count,
+            self.write_blocked_region_count,
+        )
+    }
+}
+
+/// Simple busy-wait delay in microseconds.
+///
+/// This is a placeholder; production code should use a proper timer or delay
+/// provider. Spins for approximately `micros` microseconds.
+#[inline]
+fn delay_us(micros: u32) {
+    // Very rough approximation: ~16 cycles per microsecond on Cortex-M4 @ ~50MHz.
+    for _ in 0..(micros * 16) {
+        core::hint::spin_loop();
+    }
+}

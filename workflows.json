@@ -13,7 +13,11 @@
       "name": "bazel_default_notest",
       "description": "Default bazel build configuration",
       "build_type": "bazel",
-      "args": [],
+      "args": [
+        "--keep_going",
+        "--build_tag_filters=-hardware,-disabled",
+        "--"
+      ],
       "env": {},
       "driver_options": {
         "@type": "pw.build.proto.BazelDriverOptions",
@@ -26,7 +30,8 @@
       "name": "wildcard_build",
       "use_config": "bazel_default_notest",
       "targets": [
-        "//..."
+        "//...",
+        "-//third_party/caliptra/..."
       ]
     },
     {
@@ -37,7 +42,8 @@
         "build_type": "bazel",
         "args": [
           "--aspects=@rules_rust//rust:defs.bzl%rust_clippy_aspect",
-          "--output_groups=clippy_checks"
+          "--output_groups=clippy_checks",
+          "--"
         ],
         "driver_options": {
           "@type": "pw.build.proto.BazelDriverOptions",
@@ -45,7 +51,94 @@
         }
       },
       "targets": [
-        "//..."
+        "//...",
+        "-//third_party/caliptra/..."
+      ]
+    },
+    {
+      "name": "ci_tests",
+      "build_config": {
+        "name": "ci_tests_config",
+        "description": "Execute CI tests (excluding hardware and heavyweight simulator tests)",
+        "build_type": "bazel",
+        "args": [
+          "--keep_going",
+          "--build_tag_filters=-hardware,-disabled,-verilator,-emulator",
+          "--test_tag_filters=-hardware,-disabled,-verilator,-emulator",
+          "--test_output=streamed",
+          "--"
+        ],
+        "driver_options": {
+          "@type": "pw.build.proto.BazelDriverOptions",
+          "no_test": false
+        }
+      },
+      "targets": [
+        "//...",
+        "-//third_party/caliptra/..."
+      ]
+    },
+    {
+      "name": "earlgrey_verilator_tests",
+      "build_config": {
+        "name": "earlgrey_verilator_tests_config",
+        "description": "Run Earlgrey verilator-based tests",
+        "build_type": "bazel",
+        "args": [
+          "--keep_going",
+          "--build_tag_filters=+verilator,-nightly_test",
+          "--test_tag_filters=+verilator,-nightly_test",
+          "--test_output=streamed"
+        ],
+        "driver_options": {
+          "@type": "pw.build.proto.BazelDriverOptions",
+          "no_test": false
+        }
+      },
+      "targets": [
+        "//target/earlgrey/..."
+      ]
+    },
+    {
+      "name": "caliptra_emulator_tests",
+      "build_config": {
+        "name": "caliptra_emulator_tests_config",
+        "description": "Run caliptra emulator-based tests",
+        "build_type": "bazel",
+        "args": [
+          "--keep_going",
+          "--build_tag_filters=+emulator",
+          "--test_tag_filters=+emulator",
+          "--test_output=streamed"
+        ],
+        "driver_options": {
+          "@type": "pw.build.proto.BazelDriverOptions",
+          "no_test": false
+        }
+      },
+      "targets": [
+        "//target/veer/..."
+      ]
+    },
+    {
+      "name": "ast10x0_qemu_tests",
+      "build_config": {
+        "name": "ast10x0_qemu_tests_config",
+        "description": "Run AST10x0 QEMU-based tests",
+        "build_type": "bazel",
+        "args": [
+          "--keep_going",
+          "--config=virt_ast10x0",
+          "--test_tag_filters=-hardware",
+          "--test_output=streamed"
+        ],
+        "driver_options": {
+          "@type": "pw.build.proto.BazelDriverOptions",
+          "no_test": false
+        }
+      },
+      "targets": [
+        "//target/ast10x0/..."
       ]
     }
   ],
@@ -84,6 +177,24 @@
       "description": "Common builds/configurations",
       "builds": [
         "wildcard_build"
+      ]
+    },
+    {
+      "name": "ci",
+      "description": "Execute CI tests plus dedicated AST10x0 QEMU coverage",
+      "builds": [
+        "ci_tests",
+        "ast10x0_qemu_tests"
+      ]
+    },
+    {
+      "name": "upstream_pigweed",
+      "description": "Workflow for checking upstream pigweed compatibility",
+      "builds": [
+        "ci_tests",
+        "ast10x0_qemu_tests",
+        "caliptra_emulator_tests",
+        "earlgrey_verilator_tests"
       ]
     }
   ]
