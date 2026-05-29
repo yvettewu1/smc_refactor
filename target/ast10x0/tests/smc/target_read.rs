@@ -101,7 +101,7 @@ fn run_smc_read_test() -> Result<(), SmcError> {
     dump_smc_read(&buf, 64);
 
     pw_log::info!("=== read test cs1===");
-    let n = controller.read(ChipSelect::Cs1, 0x400, &mut buf)?;
+    let n = controller.read(ChipSelect::Cs1, 0x100000, &mut buf)?;
     if n != 64 {
         return Err(SmcError::HardwareError);
     }

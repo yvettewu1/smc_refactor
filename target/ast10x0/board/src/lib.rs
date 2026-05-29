@@ -313,7 +313,7 @@ impl Ast10x0BoardDescriptor {
     /// `FMC_CS0_CAPACITY` / `FMC_CS1_CAPACITY` at lines 58-59.
     pub fn ast1060_evb_fmc_aspeed_rust_derived() -> Self {
         let cfg = FlashConfig {
-            capacity_mb: 8,
+            capacity_mb: 2,
             page_size: 256,
             sector_size: 4096,
             block_size: 65536,
